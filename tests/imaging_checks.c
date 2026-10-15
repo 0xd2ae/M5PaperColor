@@ -61,6 +61,21 @@ int main(void)
         printf("solid %d: %d%% ink %d\n",(int)s,pct,solids[s].ink);
         assert(pct>=solids[s].min);
     }
+
+    /* Tetrahedral gamut decomposition check:
+     * Warm skin/peach tone (R=235, G=185, B=155) must mix only warm/neutral inks (W, R, Y, K)
+     * with strictly 0% blue (ink 4) and 0% green (ink 5) confetti dots. */
+    solid(rgba,W*H,235,185,155);
+    assert(e6_process(rgba,W,H,p,idx,OW,OH)==0);
+    assert(share(idx,OW*OH,4)==0 && share(idx,OW*OH,5)==0);
+    /* Sky blue tone (R=110, G=175, B=235) must have 0% red (ink 2) confetti dots. */
+    solid(rgba,W*H,110,175,235);
+    assert(e6_process(rgba,W,H,p,idx,OW,OH)==0);
+    assert(share(idx,OW*OH,2)==0);
+    /* Foliage green tone (R=95, G=165, B=75) must have 0% red (ink 2) confetti dots. */
+    solid(rgba,W*H,95,165,75);
+    assert(e6_process(rgba,W,H,p,idx,OW,OH)==0);
+    assert(share(idx,OW*OH,2)==0);
     card(rgba);
     for (int mode=0;mode<2;mode++) {
         defaults(p,mode);
