@@ -7,24 +7,24 @@
   "bitmap_family": "PaperCalendarBitmap",
   "fonts": {
     "14": {
-      "glyphs": 429,
-      "bytes": 27803
+      "glyphs": 471,
+      "bytes": 30968
     },
     "18": {
-      "glyphs": 6873,
-      "bytes": 710740
+      "glyphs": 6874,
+      "bytes": 710762
     },
     "18m": {
-      "glyphs": 6873,
-      "bytes": 672152
+      "glyphs": 6874,
+      "bytes": 672177
     },
     "24": {
-      "glyphs": 429,
-      "bytes": 44607
+      "glyphs": 471,
+      "bytes": 49755
     },
     "24m": {
-      "glyphs": 429,
-      "bytes": 43270
+      "glyphs": 471,
+      "bytes": 48202
     },
     "48": {
       "glyphs": 14,

@@ -13,6 +13,7 @@ unsigned pc_buttons_update(pc_buttons_t *s,unsigned down,uint64_t ms)
         if (s->stable[i] && !s->long_sent[i] && ms-s->pressed[i]>=3000) {
             s->long_sent[i]=true;
             if (i==2) actions|=PC_ACTION_SETUP;
+            else if (i==1) actions|=PC_ACTION_PAGE;
         }
     }
     return actions;
@@ -24,12 +25,13 @@ void pc_actions_add(pc_actions_t *p,unsigned action,int64_t us)
     if (p->delta>1200) p->delta=1200;
     if (p->delta< -1200) p->delta=-1200;
     if (action&PC_ACTION_TODAY) { p->today=true; p->delta=0; }
-    if (action&PC_ACTION_SETUP) { p->setup=true; p->delta=0; p->today=false; }
+    if (action&PC_ACTION_PAGE) { p->page=!p->page; p->delta=0; p->today=false; }
+    if (action&PC_ACTION_SETUP) { p->setup=true; p->delta=0; p->today=false; p->page=false; }
     p->changed=us;
 }
 bool pc_actions_take(pc_actions_t *p,int64_t us,pc_actions_t *out)
 {
-    if (!(p->today||p->setup||p->delta) || us-p->changed<800000) return false;
-    *out=*p; p->delta=0; p->today=false; p->setup=false;
+    if (!(p->today||p->setup||p->page||p->delta) || us-p->changed<800000) return false;
+    *out=*p; p->delta=0; p->today=false; p->setup=false; p->page=false;
     return true;
 }

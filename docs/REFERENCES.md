@@ -14,6 +14,11 @@
 | [霞鹜文楷 Lite](https://github.com/lxgw/LxgwWenKai-Lite) | 原始文件 SHA-256 见 `main/generated/manifest.json` | 中文字形；SIL OFL 1.1，派生位图命名 PaperCalendarBitmap |
 | [lunar-python](https://github.com/6tail/lunar-python) | `1.4.8` | 离线生成逐日农历资源；MIT |
 | [china-holiday-calender](https://github.com/lanceliao/china-holiday-calender) | JSON `Generated: 20251104T235904Z` | 2023–2026 放假／补班快照 |
+| [PaperColor-Frame pipeline.md](https://github.com/MarsTechHAN/PaperColor-Frame/blob/main/doc/pipeline.md) | 文档 | 六色图像管线的算法思路：Lab／CIEDE2000、亮度压缩与色度保留、超采样缩放、区域分类与可见性偏置、边缘感知 Stucki 扩散、局部精修、实测调色板 |
+| [ONNX Runtime Web](https://www.npmjs.com/package/onnxruntime-web) | `1.30.0`（npm 完整性校验） | 可选，由 `prepare_sdcard.py` 下载到 TF 卡，不随固件分发；MIT |
+| [Emscripten](https://emscripten.org/) | `6.0.12` | 把 `imaging/` 编译为独立 WASM；构建工具，不进入产物 |
+
+`imaging/` 是按 pipeline.md 的文字描述独立实现的代码（clean-room）。PaperColor-Frame 采用 GPL-3.0，本项目没有复制或改写其源码；参数（区域阈值、偏置表、扩散权重）为本项目自行设定，默认实测调色板取自该文档公布的测量值。
 
 [和风天气 v1 当前天气](https://dev.qweather.com/en/docs/api/weather/weather-current/)、[每日预报](https://dev.qweather.com/en/docs/api/weather/weather-daily-forecast/)、[城市搜索](https://dev.qweather.com/en/docs/api/geoapi/city-lookup/)、[认证](https://dev.qweather.com/en/docs/configuration/authentication/)与[Gzip](https://dev.qweather.com/en/docs/configuration/api-config/)用于接口约定。界面保留和风天气来源标注，实际服务使用需符合账户许可。
 

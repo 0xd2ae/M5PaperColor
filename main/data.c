@@ -108,6 +108,67 @@ bool pc_weather_parse(const char *now,const char *daily,const char *location,int
 done:
     cJSON_Delete(a); cJSON_Delete(b); return ok;
 }
+bool pc_config_resolvable(const pc_config_t *c)
+{
+    if (!c->ssid[0] || !c->city[0] || !pc_host_valid(c->host) || !c->api_key[0]) return false;
+    size_t pw=strlen(c->password);
+    if (pw && (pw<8 || pw>63)) return false;
+    for (const char *p=c->api_key;*p;p++) if (!isalnum((unsigned char)*p) && *p!='-' && *p!='_') return false;
+    return true;
+}
+static void optional_text(const cJSON *object,const char *key,char *out,size_t cap)
+{
+    if (!text(object,key,out,cap)) out[0]=0;
+}
+bool pc_config_from_json(const char *json,pc_config_t *out)
+{
+    cJSON *root=cJSON_Parse(json);
+    if (!cJSON_IsObject(root)) { cJSON_Delete(root); return false; }
+    pc_config_t c={0};
+    const cJSON *wifi=cJSON_GetObjectItemCaseSensitive(root,"wifi");
+    const cJSON *weather=cJSON_GetObjectItemCaseSensitive(root,"qweather");
+    const cJSON *city=cJSON_GetObjectItemCaseSensitive(root,"city");
+    optional_text(wifi,"ssid",c.ssid,sizeof(c.ssid)); optional_text(wifi,"password",c.password,sizeof(c.password));
+    optional_text(weather,"host",c.host,sizeof(c.host)); optional_text(weather,"api_key",c.api_key,sizeof(c.api_key));
+    optional_text(city,"name",c.city,sizeof(c.city)); optional_text(city,"location",c.location,sizeof(c.location));
+    const cJSON *lat=cJSON_GetObjectItemCaseSensitive(city,"latitude"),*lon=cJSON_GetObjectItemCaseSensitive(city,"longitude");
+    if (cJSON_IsNumber(lat) && cJSON_IsNumber(lon) && pc_location_valid(c.location)) {
+        c.latitude=lat->valuedouble; c.longitude=lon->valuedouble; c.coordinates=true;
+    }
+    cJSON_Delete(root);
+    *out=c; return true;
+}
+char *pc_config_to_json(const pc_config_t *c)
+{
+    cJSON *root=cJSON_CreateObject(),*wifi=cJSON_AddObjectToObject(root,"wifi");
+    cJSON *weather=cJSON_AddObjectToObject(root,"qweather"),*city=cJSON_AddObjectToObject(root,"city");
+    if (!city) { cJSON_Delete(root); return NULL; }
+    cJSON_AddNumberToObject(root,"version",1);
+    cJSON_AddStringToObject(wifi,"ssid",c->ssid); cJSON_AddStringToObject(wifi,"password",c->password);
+    cJSON_AddStringToObject(weather,"host",c->host); cJSON_AddStringToObject(weather,"api_key",c->api_key);
+    cJSON_AddStringToObject(city,"name",c->city); cJSON_AddStringToObject(city,"location",c->location);
+    if (c->coordinates) {
+        cJSON_AddNumberToObject(city,"latitude",c->latitude); cJSON_AddNumberToObject(city,"longitude",c->longitude);
+    }
+    char *json=cJSON_Print(root); cJSON_Delete(root); return json;
+}
+bool pc_city_parse(const char *body,pc_config_t *config)
+{
+    cJSON *root=cJSON_Parse(body);
+    const cJSON *locations=cJSON_GetObjectItemCaseSensitive(root,"location"),*item;
+    bool ok=false;
+    if (success(root)) cJSON_ArrayForEach(item,locations) {
+        char id[33],lat[32],lon[32],zone[48],name[97],*end;
+        if (!text(item,"id",id,sizeof(id)) || !pc_location_valid(id) || !text(item,"lat",lat,sizeof(lat)) ||
+            !text(item,"lon",lon,sizeof(lon)) || !text(item,"name",name,sizeof(name)) ||
+            !text(item,"tz",zone,sizeof(zone)) || strcmp(zone,"Asia/Shanghai")) continue;
+        double a=strtod(lat,&end); if (*end) continue;
+        double b=strtod(lon,&end); if (*end) continue;
+        strcpy(config->location,id); strcpy(config->city,name);
+        config->latitude=a; config->longitude=b; config->coordinates=true; ok=true; break;
+    }
+    cJSON_Delete(root); return ok;
+}
 uint32_t pc_frame_hash(const uint8_t *pixels,size_t length)
 {
     uint32_t hash=2166136261u;

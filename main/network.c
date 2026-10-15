@@ -115,6 +115,22 @@ esp_err_t pc_http_get(const pc_config_t *c,const char *path,int64_t deadline,cha
 done:
     free(buffer); esp_http_client_close(client); esp_http_client_cleanup(client); return err;
 }
+esp_err_t pc_city_resolve(pc_config_t *c,int64_t deadline)
+{
+    char encoded[300],path[420]; size_t n=0;
+    static const char hex[]="0123456789ABCDEF";
+    for (const unsigned char *p=(const unsigned char *)c->city;*p;p++) {
+        if (n+4>=sizeof(encoded)) return ESP_ERR_INVALID_SIZE;
+        encoded[n++]='%'; encoded[n++]=hex[*p>>4]; encoded[n++]=hex[*p&15];
+    }
+    encoded[n]=0;
+    snprintf(path,sizeof(path),"/geo/v2/city/lookup?location=%s&range=cn&number=10&lang=zh",encoded);
+    char *body=NULL; esp_err_t err=pc_http_get(c,path,deadline,&body);
+    pc_config_t resolved=*c;
+    if (err==ESP_OK && !pc_city_parse(body,&resolved)) err=ESP_ERR_NOT_FOUND;
+    if (err==ESP_OK) *c=resolved;
+    free(body); return err;
+}
 esp_err_t pc_weather_fetch(const pc_config_t *c,pc_weather_t *weather,int64_t deadline)
 {
     char path[200],*now=NULL,*daily=NULL;

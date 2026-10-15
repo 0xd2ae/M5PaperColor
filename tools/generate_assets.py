@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Reproducible font and lunar resources. Run from any directory with tools venv."""
+import argparse
 import datetime as dt
 import hashlib
 import json
@@ -37,7 +38,7 @@ def rle(pixels, threshold=128):
         result.append((last << 7) | count)
     return result
 
-def font_pack(size, chars, cmap, source=SOURCE, suffix='', threshold=None):
+def font_pack(size, chars, cmap, source=SOURCE, suffix='', threshold=None, out=OUT):
     font = ImageFont.truetype(str(source), size)
     ascent, _ = font.getmetrics()
     chars = sorted(set(chars) & set(map(chr,cmap)))
@@ -52,10 +53,34 @@ def font_pack(size, chars, cmap, source=SOURCE, suffix='', threshold=None):
                                round(font.getlength(ch)),x0,ascent+y0)
         data += bitmap
     pack = struct.pack('<4sHHI',b'PCF1',size,ascent,len(chars)) + entries + data
-    (OUT/f'font{size}{suffix}.bin').write_bytes(pack)
+    (out/f'font{size}{suffix}.bin').write_bytes(pack)
     return {'glyphs':len(chars),'bytes':len(pack)}
 
+# TF-card packs: every CJK Unified Ideograph the source font covers, plus symbols and fullwidth forms.
+CARD_SIZES = (18, 24, 36)
+CARD_RANGES = ((0x20,0x7e),(0xa0,0xff),(0x2000,0x206f),(0x2100,0x218f),(0x2190,0x21ff),(0x2460,0x24ff),
+               (0x25a0,0x25ff),(0x2600,0x26ff),(0x3000,0x303f),(0x3040,0x30ff),(0x3400,0x4dbf),
+               (0x4e00,0x9fff),(0xf900,0xfaff),(0xfe30,0xfe4f),(0xff00,0xffef))
+
+def card_fonts(out):
+    out.mkdir(parents=True,exist_ok=True)
+    source_font = TTFont(SOURCE)
+    cmap = source_font.getBestCmap()
+    chars = ''.join(chr(c) for lo,hi in CARD_RANGES for c in range(lo,hi+1))
+    info = {'source_sha256':hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
+            'source_url':'https://github.com/lxgw/LxgwWenKai-Lite',
+            'source_version':source_font['name'].getDebugName(5),
+            'bitmap_family':'PaperCalendarBitmap','license':'SIL Open Font License 1.1','fonts':{}}
+    for size in CARD_SIZES:
+        info['fonts'][str(size)] = font_pack(size,chars,cmap,threshold=THRESHOLD.get(size,112),out=out)
+    (out/'manifest.json').write_text(json.dumps(info,ensure_ascii=False,indent=2)+'\n')
+    print(json.dumps(info,ensure_ascii=False,indent=2))
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sd-out',type=Path,help='write only the TF-card font packs to this directory')
+    args = parser.parse_args()
+    if args.sd_out: return card_fonts(args.sd_out)
     OUT.mkdir(parents=True,exist_ok=True)
     source_font = TTFont(SOURCE)
     cmap = source_font.getBestCmap()

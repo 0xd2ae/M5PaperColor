@@ -30,7 +30,7 @@ typedef struct {
 typedef struct {
     pc_date_t today;
     int view_year, view_month;
-    bool time_valid, offline, configuring, indoor_valid;
+    bool time_valid, offline, configuring, indoor_valid, card_missing;
     int battery_percent;
     int indoor_temperature, indoor_humidity; /* whole °C and % */
     char city[97], updated[32];
@@ -55,6 +55,12 @@ pc_day_kind_t pc_holidays_kind(const pc_holidays_t *table, pc_date_t date, const
 bool pc_host_valid(const char *host);
 bool pc_location_valid(const char *value);
 bool pc_config_valid(const pc_config_t *config);
+/* Wi-Fi and API set and a city name, but no Location ID/coordinates yet (hand-written config.json). */
+bool pc_config_resolvable(const pc_config_t *config);
+bool pc_config_from_json(const char *json, pc_config_t *out);
+char *pc_config_to_json(const pc_config_t *config);
+/* First mainland-China match of a GeoAPI city lookup response. */
+bool pc_city_parse(const char *body, pc_config_t *config);
 bool pc_weather_parse(const char *now, const char *daily, const char *location,
                       int64_t fetched, pc_weather_t *out);
 uint32_t pc_frame_hash(const uint8_t *pixels, size_t length);

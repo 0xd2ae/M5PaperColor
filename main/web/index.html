@@ -1,24 +1,265 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PaperColor 设置</title>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f4f1e8">
+<title>PaperColor</title>
 <style>
-:root{font:16px system-ui,sans-serif;color:#182820;background:#f5f5ed}*{box-sizing:border-box}body{max-width:600px;margin:0 auto;padding:24px 18px}header{border-top:6px solid #245abc;padding-top:14px}h1{margin:0;font-size:30px}header p{color:#56705d}section{background:white;padding:20px;border:1px solid #dbe3d7;border-radius:16px;margin:18px 0}h2{font-size:20px;margin:0 0 18px}label{display:block;margin:14px 0 6px}input,select,button{font:inherit;width:100%;padding:12px;border:1px solid #abbeb0;border-radius:8px;background:white}button{background:#245abc;color:white;border:0;cursor:pointer;margin-top:16px}button.secondary{background:#edf3ea;color:#234f30}button:disabled{opacity:.5;cursor:wait}.hint{font-size:14px;color:#58705f;line-height:1.6}#status{position:sticky;top:8px;padding:14px;background:#fff3b5;border-radius:10px;white-space:pre-wrap;z-index:1}a{color:#245abc}footer{font-size:14px;color:#58705f;line-height:1.8}.colors{display:flex;height:5px;margin-top:20px}.colors i{flex:1}#status:empty{display:none}
+:root{--paper:#f4f1e8;--card:#fffdf7;--line:#e3ddcd;--ink:#1d211d;--muted:#676d63;--blue:#2b52ac;--red:#bb1a1c;--yellow:#f9de37;--green:#35803a;--black:#161b16;
+  --soft:#ebe7da;--radius:18px;--top:env(safe-area-inset-top);--bottom:env(safe-area-inset-bottom);font:16px/1.5 system-ui,-apple-system,"PingFang SC","Noto Sans SC",sans-serif;color:var(--ink);background:var(--paper)}
+*{box-sizing:border-box}[hidden]{display:none!important}html,body{margin:0;overflow-x:hidden}body{min-height:100vh;-webkit-tap-highlight-color:transparent}
+h1,h2,h3{margin:0;line-height:1.25}h2{font-size:18px}h3{font-size:15px;color:var(--muted);font-weight:600}a{color:var(--blue)}
+button,input,select{font:inherit;color:inherit}
+button{border:0;border-radius:12px;padding:11px 16px;min-height:44px;background:var(--soft);cursor:pointer;font-weight:600}
+button.primary{background:var(--blue);color:#fff}button.danger{background:#f7e3df;color:var(--red)}button.ghost{background:transparent;color:var(--blue);padding:8px 10px}
+button:disabled{opacity:.45;cursor:default}
+input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]),select{width:100%;min-height:46px;padding:10px 12px;border:1px solid #cfc8b6;border-radius:12px;background:#fff}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:3px solid #2b52ac55;outline-offset:1px}
+label.field{display:block;margin:12px 0 0}label.field>span{display:block;font-size:14px;color:var(--muted);margin-bottom:5px}
+.hint{font-size:13.5px;color:var(--muted);margin:8px 0 0}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1 1 0;min-width:0}
+.result{font-size:14px;margin:10px 0 0;padding:9px 12px;border-radius:10px;white-space:pre-wrap}.result:empty{display:none}
+.result.ok{background:#e4f0e2;color:#24572a}.result.err{background:#f9e4e1;color:#8f1d15}.result.wait{background:#fbf3c8;color:#5f5314}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:0 0 14px;box-shadow:0 1px 0 #0000000a}
+.card>header{display:flex;align-items:center;gap:10px;margin-bottom:6px}.card>header .dot{width:10px;height:10px;border-radius:50%;flex:none}
+.seg{display:inline-flex;background:var(--soft);border-radius:12px;padding:3px;gap:2px;max-width:100%}
+.seg label{position:relative;flex:1 1 auto}.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg span{display:block;text-align:center;padding:7px 12px;border-radius:9px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;white-space:nowrap}
+.seg input:checked+span{background:#fff;color:var(--ink);box-shadow:0 1px 3px #0002}.seg input:focus-visible+span{outline:3px solid #2b52ac55}
+.seg.wide{display:flex}.check{display:flex;gap:10px;align-items:center;margin-top:14px;font-size:15px}.check input{width:20px;height:20px}
+.palette-strip{display:flex;height:4px;border-radius:2px;overflow:hidden}.palette-strip i{flex:1}
+
+/* App frame */
+.app{max-width:640px;margin:0 auto;padding:calc(10px + var(--top)) 14px calc(92px + var(--bottom))}
+.brand{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 12px}.brand h1{font-size:20px;letter-spacing:.5px}
+.brand small{color:var(--muted);font-size:13px}.brand .palette-strip{width:84px}
+.dock{height:var(--dock-height,282px);margin-bottom:14px}
+#ended{background:#e4f0e2;color:#24572a;border-color:#bcd8b8}
+
+/* Preview card */
+.preview{display:grid;grid-template-columns:auto minmax(0,1fr);gap:14px;background:var(--card);border:1px solid var(--line);border-radius:22px;padding:12px;box-shadow:0 6px 18px #4a42260f}
+.device{position:relative;background:#2c302b;border-radius:14px;padding:7px 7px 12px;align-self:start;cursor:zoom-in}
+.device::after{content:"";position:absolute;left:50%;bottom:4px;width:18px;height:3px;margin-left:-9px;border-radius:2px;background:#555b53}
+#screen{display:block;width:160px;height:240px;background:#fffff7;border-radius:3px}
+#pvBusy{position:absolute;right:12px;top:12px;width:14px;height:14px;border-radius:50%;border:2px solid #fff8;border-top-color:var(--blue);animation:spin .8s linear infinite;background:#fff9}
+@keyframes spin{to{transform:rotate(1turn)}}
+.pv-side{display:flex;flex-direction:column;gap:9px;min-width:0}.pv-side b{font-size:16px;display:block;overflow-wrap:anywhere}
+.pv-side small{display:block;font-size:12.5px;color:var(--muted);line-height:1.45}.pv-nav{display:flex;gap:6px}.pv-nav button{flex:1;min-height:40px;padding:6px 2px;font-size:14px;white-space:nowrap}#pvPrev,#pvNext{font-size:20px;flex:.8}
+#pvPush{margin-top:auto}#pvNote{font-size:12.5px;color:var(--muted);margin-top:auto}
+.preview.compact{position:fixed;z-index:30;left:8px;right:8px;top:calc(var(--compact-top,0px) + 6px + var(--top));grid-template-columns:auto minmax(0,1fr) auto;align-items:center;padding:8px 10px;border-radius:16px;box-shadow:0 8px 24px #0002;max-width:624px;margin:0 auto}
+.preview.compact #screen{width:44px;height:66px}.preview.compact .device{padding:3px 3px 6px;border-radius:7px}.preview.compact .device::after{display:none}
+.preview.compact .pv-side{gap:2px}.preview.compact .pv-side b{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview.compact .pv-side small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview.compact .seg,.preview.compact .pv-nav,.preview.compact #pvNote{display:none!important}.preview.compact #pvPush{margin:0;min-height:38px;padding:6px 12px;font-size:14px}
+.preview.compact #pvBusy{right:6px;top:6px;width:10px;height:10px}
+.pv-actions{display:contents}.preview.compact .pv-actions{display:block}
+
+/* Tabs */
+.tabbar{position:fixed;z-index:20;left:0;right:0;bottom:0;display:flex;justify-content:center;gap:4px;padding:6px 10px calc(6px + var(--bottom));background:#fffdf7f0;border-top:1px solid var(--line);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.tab{flex:1;max-width:200px;display:flex;flex-direction:column;align-items:center;gap:2px;background:none;min-height:54px;padding:6px 4px;border-radius:12px;color:var(--muted);font-size:12px}
+.tab svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tab[aria-selected=true]{color:var(--blue);background:#2b52ac12}
+
+/* Screen tab */
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;margin:0 -2px 8px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}
+.chip{flex:none;min-height:38px;padding:7px 14px;border-radius:19px;background:var(--card);border:1px solid var(--line);font-size:14px;max-width:12em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 13px;min-width:0}
+.stat span{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}.stat span i{width:8px;height:8px;border-radius:50%;background:var(--green)}
+.stat.warn span i{background:#d9b60f}.stat.bad span i{background:var(--red)}.stat.off span i{background:#b5b0a2}
+.stat b{display:block;font-size:16px;margin-top:3px;overflow-wrap:anywhere}.stat small{display:block;font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.keys{font-size:14px;color:var(--muted);margin:0;padding-left:1.2em}.keys li{margin:4px 0}kbd{font:600 12px system-ui;background:var(--soft);border-radius:5px;padding:1px 6px;color:var(--ink)}
+
+/* Anniversary list */
+.list{display:flex;flex-direction:column;gap:10px}
+.item{display:flex;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px;cursor:pointer;text-align:left;width:100%;font-weight:400;min-height:0}
+.item canvas{width:56px;height:84px;border-radius:5px;background:var(--soft);flex:none;border:3px solid #2c302b}
+.item .info{flex:1;min-width:0}.item b{display:block;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .days{font-size:20px;font-weight:700;margin:2px 0}.item .meta{font-size:12.5px;color:var(--muted)}
+.item .go{color:#a39d8c;font-size:22px;flex:none}.empty{text-align:center;padding:26px 16px;color:var(--muted)}
+.fab{width:100%;margin-top:12px}
+
+/* Editor sheet */
+.sheet{position:fixed;inset:0;z-index:25;background:var(--paper);overflow-y:auto;overscroll-behavior:contain}
+.sheet-bar{position:sticky;top:0;z-index:28;display:flex;align-items:center;gap:8px;padding:calc(6px + var(--top)) 10px 6px;background:#f4f1e8f2;border-bottom:1px solid var(--line);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);height:calc(58px + var(--top))}
+.sheet-bar h2{flex:1;text-align:center;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sheet-bar button{min-width:72px}
+.sheet-body{max-width:640px;margin:0 auto;padding:12px 14px calc(28px + var(--bottom))}
+body.editing{overflow:hidden}body.editing .preview.compact{--compact-top:58px}
+.step{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;font-size:13px;flex:none}
+.swatches{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}.swatches label{position:relative}.swatches input{position:absolute;opacity:0}
+.swatches span{display:block;width:40px;height:40px;border-radius:50%;border:2px solid #0003;cursor:pointer}
+.swatches input:checked+span{box-shadow:0 0 0 3px var(--card),0 0 0 5px var(--ink)}.swatches input:focus-visible+span{outline:3px solid #2b52ac55;outline-offset:4px}
+.stage{position:relative;margin:12px auto 4px;width:min(100%,300px);aspect-ratio:2/3;touch-action:none}
+.stage canvas{width:100%;height:100%;border-radius:8px;display:block;cursor:grab;image-rendering:pixelated;border:6px solid #2c302b}
+#busy{position:absolute;right:12px;top:12px;background:#fff3b5;padding:2px 8px;border-radius:6px;font-size:12.5px}#busy:empty{display:none}
+.slider{display:grid;grid-template-columns:6.5em minmax(0,1fr) 3em;gap:8px;align-items:center;margin:4px 0;font-size:14px}.slider input{width:100%}.slider output{text-align:right;font-variant-numeric:tabular-nums}
+details{margin-top:12px}summary{cursor:pointer;color:var(--blue);font-weight:600;padding:6px 0}
+.picker{display:flex;align-items:center;justify-content:center;gap:8px;border:2px dashed #cfc8b6;border-radius:14px;padding:18px;color:var(--muted);cursor:pointer;margin-top:10px;font-weight:600}
+.picker input{position:absolute;width:1px;height:1px;opacity:0}
+
+/* Pixel zoom */
+.zoom{position:fixed;inset:0;z-index:40;background:#1d211df2;display:flex;flex-direction:column}
+.zoom-bar{display:flex;align-items:center;gap:10px;padding:calc(8px + var(--top)) 12px 8px;color:#fff}.zoom-bar .seg{background:#ffffff22}.zoom-bar .seg span{color:#ddd}
+.zoom-bar .seg input:checked+span{color:var(--ink)}.zoom-bar button{margin-left:auto}
+.zoom-body{flex:1;overflow:auto;display:grid;place-items:center;padding:12px 12px calc(12px + var(--bottom))}
+#zoomCanvas{image-rendering:pixelated;image-rendering:crisp-edges;background:#fff;width:400px;height:600px}
+.toast{position:fixed;z-index:50;left:50%;bottom:calc(84px + var(--bottom));transform:translateX(-50%);max-width:min(92vw,520px);background:var(--ink);color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;box-shadow:0 8px 24px #0003}
+.toast.err{background:var(--red)}
+
+/* Wide screens: preview column on the left at 1:1, content on the right, tabs on top. */
+@media (min-width:980px){
+  .app{max-width:1160px;display:grid;grid-template-columns:440px minmax(0,1fr);column-gap:32px;padding:28px 28px 40px}
+  .brand{grid-column:1/-1}.dock{height:auto;position:sticky;top:24px;align-self:start}
+  .preview{grid-template-columns:1fr;padding:18px}.device{justify-self:center;padding:10px 10px 18px}#screen{width:400px;height:600px;image-rendering:pixelated}
+  .content{display:flex;flex-direction:column}.tabbar{order:-1;position:sticky;top:24px;padding:6px;border:1px solid var(--line);border-radius:16px;margin-bottom:16px;justify-content:flex-start}
+  .tab{flex-direction:row;justify-content:center;gap:8px;font-size:15px;min-height:44px}.toast{bottom:28px}
+  .sheet-body{max-width:1160px;display:grid;grid-template-columns:440px minmax(0,1fr);column-gap:32px;padding:24px 28px 40px}
+  .sheet-body .dock{grid-row:1/span 9}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
 </style></head><body>
-<header><h1>天气与日历</h1><p>PaperColor · 六色桌面日历</p></header><div id="status" role="status" aria-live="polite"></div>
-<section><h2>① 连接家庭 Wi-Fi</h2><label for="ssid">家庭 Wi-Fi 名称（2.4 GHz）</label><input id="ssid" maxlength="32" autocomplete="off"><label for="password">家庭 Wi-Fi 密码</label><input id="password" type="password" maxlength="63" autocomplete="new-password"><p class="hint" id="passwordHint">家庭 Wi-Fi 是开放网络时可留空。</p><button id="connect">连接并校时</button><p class="hint">手机应继续连接开放热点 PaperColor-Setup；热点切换信道后如断开，请重新连接。</p></section>
-<section><h2>② 设置天气城市</h2><label for="host">和风天气 API Host</label><input id="host" placeholder="控制台中的 xxx.qweatherapi.com" autocomplete="off"><label for="key">API Key</label><input id="key" type="password" maxlength="128" autocomplete="new-password"><p class="hint" id="keyHint">使用你自己的和风天气凭据。</p><label for="query">搜索城市或区县</label><input id="query" placeholder="例如：深圳" maxlength="32"><button class="secondary" id="search">搜索城市</button><label for="city">选择城市</label><select id="city"><option value="">请先搜索</option></select><button id="save">验证天气并保存</button><p class="hint">保存前验证天气接口；失败保留原配置。切换城市会更新天气缓存。</p><a href="https://dev.qweather.com/" target="_blank" rel="noreferrer">和风天气开发者服务</a></section>
-<section><h2>③ 更新放假调休表</h2><p class="hint">内置 2023–2026 年安排。新年度通知发布后，上传同格式 JSON。农历和普通周末无需导入。</p><label for="holidays">年度表 JSON 文件</label><input id="holidays" type="file" accept="application/json,.json"><button class="secondary" id="import">校验并导入</button><p><a href="https://raw.githubusercontent.com/lanceliao/china-holiday-calender/master/holidayAPI.json" target="_blank" rel="noreferrer">下载年度表</a></p></section>
-<button class="secondary" id="exit">退出配置，返回日历</button><footer><p>顶部 C：回到今天并刷新；长按三秒：配置。<br>侧上 A：上月；侧下 B：下月。<br>屏幕更新约需 15–30 秒。配置闲置十分钟后退出。</p><div class="colors"><i style="background:#111"></i><i style="background:#fff"></i><i style="background:#ba2020"></i><i style="background:#e9c931"></i><i style="background:#245abc"></i><i style="background:#347f39"></i></div></footer>
-<script>
-'use strict';
-const $=id=>document.getElementById(id);let busy=false;
-function message(s){$('status').textContent=s}
-async function response(r){const text=await r.text();if(!r.ok)throw Error(text||'设备请求失败，请重新打开配置页');try{return JSON.parse(text)}catch(e){throw Error('设备返回内容异常，请重新打开配置页')}}
-async function post(path,data,raw=false){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:raw?data:JSON.stringify(data)});return response(r)}
-function api(){return {host:$('host').value.trim(),api_key:$('key').value.trim()}}
-async function action(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{await fn()}catch(e){message(e.message||'请求失败，请重新连接热点')}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false)}}
-$('connect').onclick=()=>action(async()=>{message('正在连接 Wi-Fi 并校时…');const r=await post('/api/connect',{ssid:$('ssid').value,password:$('password').value});message(r.message)});
-$('search').onclick=()=>action(async()=>{message('正在搜索城市…');const r=await post('/api/cities',{...api(),query:$('query').value.trim()});if(!r.location)throw Error(r.message||'没有找到城市');$('city').replaceChildren();for(const c of r.location){const o=document.createElement('option');o.value=c.id;o.textContent=[c.adm1,c.adm2,c.name].filter(Boolean).join(' / ');$('city').append(o)}message('请选择城市，然后保存')});
-$('save').onclick=()=>action(async()=>{if(!$('city').value)throw Error('请先选择城市');message('正在验证天气并保存…');const r=await post('/api/save',{...api(),location:$('city').value});message(r.message)});
-$('import').onclick=()=>action(async()=>{const f=$('holidays').files[0];if(!f)throw Error('请选择 JSON 文件');if(f.size>60000)throw Error('年度表不能超过 60 KB');const content=await f.text();JSON.parse(content);message('正在校验年度表…');const r=await post('/api/holidays',content,true);message(r.message)});
-$('exit').onclick=()=>action(async()=>{const r=await post('/api/exit',{});message(r.message)});
-(async()=>{try{const r=await fetch('/api/status',{cache:'no-store'}).then(response);$('ssid').value=r.ssid;$('host').value=r.host;if(r.has_password)$('passwordHint').textContent='保留相同 Wi-Fi 时，留空沿用原密码；修改名称后留空表示开放网络。';if(r.has_key)$('keyHint').textContent='API Host 不变时，留空沿用已保存的凭据。';if(r.location){const o=document.createElement('option');o.value=r.location;o.textContent=r.city;$('city').append(o);$('city').value=r.location}}catch(e){message(e.message||'无法连接设备，请重新连接热点并打开 192.168.4.1')}})();
-</script></body></html>
+<div class="app">
+  <div class="brand"><div><h1>PaperColor</h1><small>六色墨水屏日历 · 配置</small></div>
+    <div class="palette-strip" aria-hidden="true"><i style="background:#161b16"></i><i style="background:#fff;border:1px solid #ddd"></i><i style="background:#bb1a1c"></i><i style="background:#f9de37"></i><i style="background:#2b52ac"></i><i style="background:#35803a"></i></div></div>
+
+  <div class="dock" id="mainDock">
+    <section class="preview" id="previewCard" aria-label="墨水屏预览">
+      <div class="device" id="device" title="点按放大查看像素"><canvas id="screen" width="400" height="600" aria-label="墨水屏画面"></canvas><span id="pvBusy" hidden></span></div>
+      <div class="pv-side">
+        <div><b id="pvTitle">墨水屏预览</b><small id="pvSub">正在连接设备…</small></div>
+        <div class="seg" role="radiogroup" aria-label="调色板">
+          <label><input type="radio" name="palette" value="measured" checked><span>实测色</span></label>
+          <label><input type="radio" name="palette" value="ideal"><span>理想色</span></label></div>
+        <div class="pv-nav" id="pvNav"><button id="pvPrev" class="keep" aria-label="上月">‹</button><button id="pvToday" class="keep">本月</button><button id="pvNext" class="keep" aria-label="下月">›</button></div>
+        <div class="pv-actions"><button class="primary" id="pvPush" hidden>在墨水屏上显示</button></div>
+        <div id="pvNote" hidden></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="content">
+    <main>
+      <section id="tab-screen" aria-labelledby="t-screen">
+        <div class="card" id="ended" hidden><header><h2>已退出配置</h2></header><p class="hint">设备正在更新屏幕并回到日历，可以关闭此页。再次配置：长按顶部 C 键三秒。</p></div>
+        <div class="card" id="cardWarning" hidden><header><span class="dot" style="background:var(--red)"></span><h2>未检测到 TF 卡</h2></header>
+          <p class="hint">配置、纪念日、图片和扩展字库都保存在 TF 卡上。请关机插入 FAT32 格式的 TF 卡后重新开机；没有卡时日历只能离线显示。</p></div>
+        <h3 style="margin:2px 2px 8px">预览内容</h3>
+        <div class="chips" id="chips"></div>
+        <h3 style="margin:6px 2px 8px">设备状态</h3>
+        <div class="stats" id="stats"></div>
+        <div class="card"><header><h2>按键</h2></header>
+          <ul class="keys"><li><kbd>C</kbd> 顶部：回到今天并刷新；长按三秒进入配置</li><li><kbd>A</kbd> <kbd>B</kbd> 侧面：上月／下月，纪念日页切换纪念日</li><li>长按 <kbd>B</kbd> 三秒：切换日历与纪念日页</li></ul>
+          <p class="hint">墨水屏刷新约 15–30 秒。配置页闲置十分钟后自动退出。</p></div>
+        <button class="primary" id="exit" style="width:100%">退出配置，返回日历</button>
+        <p class="result" id="exitResult"></p>
+      </section>
+
+      <section id="tab-anniv" aria-labelledby="t-anniv" hidden>
+        <div class="card" id="annivNoCard" hidden><header><span class="dot" style="background:var(--red)"></span><h2>需要 TF 卡</h2></header><p class="hint">纪念日和图片保存在 TF 卡上，插卡并重启后可用。</p></div>
+        <div id="annivBody">
+          <p class="hint" style="margin:0 2px 10px">倒数日显示“还有 N 天”，经历日显示“已经 N 天”。纪念日当天自动显示纪念日页。</p>
+          <div class="list" id="annivList"></div>
+          <button class="primary fab" id="annivNew">＋ 添加纪念日</button>
+        </div>
+      </section>
+
+      <section id="tab-settings" aria-labelledby="t-settings" hidden>
+        <div class="card"><header><span class="dot" id="wifiDot"></span><h2>家庭 Wi-Fi</h2></header>
+          <label class="field"><span>名称（仅 2.4 GHz）</span><input id="ssid" maxlength="32" autocomplete="off"></label>
+          <label class="field"><span>密码</span><input id="password" type="password" maxlength="63" autocomplete="new-password"></label>
+          <p class="hint" id="passwordHint">开放网络可留空。</p>
+          <div class="row" style="margin-top:12px"><button class="primary" id="connect">连接并校时</button></div>
+          <p class="result" id="wifiResult"></p>
+          <p class="hint">手机需保持连接热点 PaperColor-Setup；热点切换信道后若断开，请重新连接。</p></div>
+
+        <div class="card"><header><span class="dot" id="weatherDot"></span><h2>天气城市</h2></header>
+          <label class="field"><span>和风天气 API Host</span><input id="host" placeholder="控制台里的 xxx.qweatherapi.com" autocomplete="off"></label>
+          <label class="field"><span>API Key</span><input id="key" type="password" maxlength="128" autocomplete="new-password"></label>
+          <p class="hint" id="keyHint">使用你自己的和风天气凭据。</p>
+          <label class="field"><span>搜索城市或区县</span><div class="row"><input id="query" placeholder="例如：深圳" maxlength="32"><button id="search" style="flex:none">搜索</button></div></label>
+          <label class="field"><span>选择城市</span><select id="city"><option value="">请先搜索</option></select></label>
+          <div class="row" style="margin-top:12px"><button class="primary" id="save">验证天气并保存</button></div>
+          <p class="result" id="weatherResult"></p>
+          <p class="hint">保存前会先验证天气接口，失败时保留原配置。保存成功后设备退出配置并刷新屏幕。<a href="https://dev.qweather.com/" target="_blank" rel="noreferrer">和风天气开发者服务</a></p></div>
+
+        <div class="card"><header><span class="dot" id="holidayDot"></span><h2>放假调休表</h2></header>
+          <p class="hint" id="holidayInfo"></p>
+          <label class="picker"><input id="holidays" type="file" accept="application/json,.json"><span id="holidayFile">选择年度表 JSON 文件</span></label>
+          <div class="row" style="margin-top:12px"><button id="import">校验并导入</button></div>
+          <p class="result" id="holidaysResult"></p>
+          <p class="hint">新年度安排公布后导入同格式 JSON，导入后预览立即生效。农历和普通周末无需导入。<a href="https://raw.githubusercontent.com/lanceliao/china-holiday-calender/master/holidayAPI.json" target="_blank" rel="noreferrer">下载年度表</a></p></div>
+
+        <div class="card"><header><span class="dot" id="tfDot"></span><h2>TF 卡</h2></header>
+          <div class="stats" id="tfStats" style="margin:6px 0 0"></div>
+          <p class="hint" style="color:var(--red)">注意：config.json 以明文保存 Wi-Fi 密码和 API Key，请勿把 TF 卡交给他人。</p>
+          <p class="hint">字库和 AI 模型用电脑运行 <code>tools/prepare_sdcard.py</code> 写入卡上的 <code>papercolor/</code> 目录。</p></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" role="tablist" aria-label="页面">
+      <button class="tab keep" role="tab" id="t-screen" data-tab="screen" aria-selected="true"><svg viewBox="0 0 24 24"><rect x="5" y="2.5" width="14" height="19" rx="2.5"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>屏幕</button>
+      <button class="tab keep" role="tab" id="t-anniv" data-tab="anniv" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>纪念日</button>
+      <button class="tab keep" role="tab" id="t-settings" data-tab="settings" aria-selected="false"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>设置</button>
+    </nav>
+  </div>
+</div>
+
+<div class="sheet" id="editor" hidden role="dialog" aria-modal="true" aria-labelledby="editorTitle">
+  <div class="sheet-bar"><button class="ghost keep" id="aCancel">‹ 返回</button><h2 id="editorTitle">添加纪念日</h2><button class="primary" id="aSave">保存</button></div>
+  <div class="sheet-body">
+    <div class="dock" id="editorDock"></div>
+    <div>
+      <p class="result" id="editorResult"></p>
+      <div class="card"><header><span class="step">1</span><h2>基本信息</h2></header>
+        <label class="field"><span>名称</span><input id="aName" maxlength="32" placeholder="例如：结婚纪念日"></label>
+        <label class="field"><span>日期</span><input id="aDate" type="date" min="1900-01-01" max="2099-12-31"></label>
+        <label class="field"><span>类型</span></label>
+        <div class="seg wide" role="radiogroup" aria-label="类型"><label><input type="radio" name="mode" value="countdown" checked><span>倒数日 · 还有 N 天</span></label><label><input type="radio" name="mode" value="elapsed"><span>经历日 · 已经 N 天</span></label></div>
+        <label class="field"><span>重复</span></label>
+        <div class="seg wide" role="radiogroup" aria-label="重复"><label><input type="radio" name="repeat" value="yearly" checked><span>每年</span></label><label><input type="radio" name="repeat" value="once"><span>仅一次</span></label></div>
+        <label class="check"><input type="checkbox" id="aLunar">按农历日期每年重复（如农历生日）</label>
+        <div class="row" id="lunarRow" hidden style="margin-top:10px"><select id="aLunarMonth" aria-label="农历月"></select><select id="aLunarDay" aria-label="农历日"></select></div>
+      </div>
+
+      <div class="card"><header><span class="step">2</span><h2>图片 <small style="font-weight:400;color:var(--muted);font-size:13px">可选</small></h2></header>
+        <label class="picker"><input id="aImage" type="file" accept="image/*"><span id="pickLabel">选择照片</span></label>
+        <div id="imageTools" hidden>
+          <div class="seg wide" role="radiogroup" aria-label="仅图片视图" style="margin-top:12px"><label><input type="radio" name="stageView" value="dither" checked><span>仅图片 · 抖色</span></label><label><input type="radio" name="stageView" value="source"><span>原图对比</span></label></div>
+          <div class="stage"><canvas id="stage" width="400" height="600" aria-label="图片取景"></canvas><span id="busy"></span></div>
+          <p class="hint" style="text-align:center;margin-top:2px">拖动图片调整取景。上方预览卡显示设备绘制的整页效果。</p>
+          <div class="row" style="margin-top:10px"><button id="rotL">↺ 左转</button><button id="rotR">右转 ↻</button></div>
+          <div class="row" style="margin-top:10px">
+            <div class="seg wide" role="radiogroup" aria-label="适配"><label><input type="radio" name="fit" value="cover" checked><span>铺满裁剪</span></label><label><input type="radio" name="fit" value="contain"><span>完整显示</span></label></div>
+            <div class="seg wide" role="radiogroup" aria-label="留白"><label><input type="radio" name="bg" value="#ffffff" checked><span>白边</span></label><label><input type="radio" name="bg" value="#000000"><span>黑边</span></label></div></div>
+          <div class="slider" style="margin-top:8px"><span>缩放</span><input id="zoom" type="range" min="1" max="4" step="0.01" value="1"><output id="zoomOut">1.00</output></div>
+          <div class="row" style="margin-top:6px">
+            <label class="field" style="margin:0"><span>预设</span><select id="preset"><option value="balanced">均衡</option><option value="landscape">风景</option><option value="portrait">人像</option><option value="anime">动漫</option><option value="document">文档</option></select></label>
+            <label class="field" style="margin:0"><span>抖色路径</span><select id="ditherMode"><option value="0">E6 Mix（推荐）</option><option value="1">Classic VED</option></select></label></div>
+          <div class="row" style="margin-top:12px"><button class="primary" id="auto">自动调色</button><button id="aiAuto" hidden>AI 自动</button></div>
+          <p class="hint" id="autoNote"></p>
+          <details><summary>手动参数</summary><div id="sliders"></div></details>
+          <button class="danger" id="removeImage" style="margin-top:12px;width:100%">移除图片</button>
+        </div>
+      </div>
+
+      <div class="card"><header><span class="step">3</span><h2>文字条</h2></header>
+        <label class="field"><span>位置</span></label>
+        <div class="seg wide" role="radiogroup" aria-label="文字条位置"><label><input type="radio" name="overlay" value="bottom" checked><span>底部</span></label><label><input type="radio" name="overlay" value="top"><span>顶部</span></label></div>
+        <label class="field"><span>颜色</span></label>
+        <div class="swatches" role="radiogroup" aria-label="文字条颜色">
+          <label title="白"><input type="radio" name="band" value="white" checked aria-label="白"><span style="background:#fffff7"></span></label>
+          <label title="黑"><input type="radio" name="band" value="black" aria-label="黑"><span style="background:#161b16"></span></label>
+          <label title="红"><input type="radio" name="band" value="red" aria-label="红"><span style="background:#bb1a1c"></span></label>
+          <label title="黄"><input type="radio" name="band" value="yellow" aria-label="黄"><span style="background:#f9de37"></span></label>
+          <label title="蓝"><input type="radio" name="band" value="blue" aria-label="蓝"><span style="background:#2b52ac"></span></label>
+          <label title="绿"><input type="radio" name="band" value="green" aria-label="绿"><span style="background:#35803a"></span></label></div>
+        <p class="hint">没有图片时整页使用这个颜色。缺字会显示为 ?，可在 TF 卡上放入扩展字库。</p>
+      </div>
+      <button class="danger" id="aDelete" style="width:100%" hidden>删除这个纪念日</button>
+    </div>
+  </div>
+</div>
+
+<div class="zoom" id="zoomLayer" hidden role="dialog" aria-modal="true" aria-label="像素放大">
+  <div class="zoom-bar"><div class="seg" role="radiogroup" aria-label="放大倍数"><label><input type="radio" name="zoomScale" value="1" checked><span>1:1</span></label><label><input type="radio" name="zoomScale" value="2"><span>2:1</span></label></div>
+    <button class="keep" id="zoomClose">关闭</button></div>
+  <div class="zoom-body"><canvas id="zoomCanvas" width="400" height="600"></canvas></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="/app.js"></script></body></html>

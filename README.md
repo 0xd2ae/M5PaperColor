@@ -34,15 +34,79 @@ idf.py -B build-calendar -p /dev/tty.usbmodem213101 flash monitor
 
 保留相同家庭 Wi-Fi／API Host 时，密码／凭据留空沿用原值。更改家庭 Wi-Fi 名称后空密码表示开放网络。配置期间手机应继续连接 **PaperColor-Setup**；设备连接家庭 Wi-Fi 时热点可能变换信道，手机断开后需要重新连接。
 
-家庭 Wi-Fi 密码与 API 密钥保存在 NVS，不返回配置页、不写入日志。配置 HTTP 服务不做额外鉴权；开放热点和服务只在配置模式运行，十分钟无操作自动退出。设备天气请求使用证书校验的 HTTPS，禁用自动重定向。NVS 当前未启用加密，不应将本固件视为已完成量产安全加固。
+**家庭 Wi-Fi 密码与 API Key 以明文保存在 TF 卡的 `papercolor/config.json`。** 任何拿到这张卡的人都能读出它们；不要把卡借给别人或混用，丢卡后请更换 Wi-Fi 密码并在和风天气控制台重置 Key。凭据不返回配置页、不写入日志。没有插卡时配置无法保存，设备只做离线日历显示。配置 HTTP 服务不做额外鉴权；开放热点和服务只在配置模式运行，十分钟无操作自动退出。设备天气请求使用证书校验的 HTTPS，禁用自动重定向。不应将本固件视为已完成量产安全加固。
+
+## TF 卡
+
+使用 FAT32 格式的 TF 卡，关机后插拔。卡与屏幕共用 SPI 总线，固件在屏幕传输期间独占总线；深度睡眠前卸载并断开卡电源。
+
+```text
+papercolor/
+  config.json            Wi-Fi、和风天气凭据与城市（明文）
+  config.example.json    离线配置模板，不含凭据
+  holidays.json          导入的放假调休表
+  anniversaries.json     纪念日列表（最多 32 个）
+  images/<id>.e6         400×600 六色 4bpp 帧缓冲，120,000 字节，设备直接显示
+  images/<id>.jpg        原图（≤1600 px），网页重新编辑用
+  images/<id>.json       旋转／裁剪／调色参数
+  fonts/font18|24|36.bin 扩展字库（可选）
+  web/ort/               ONNX Runtime Web 与模型（可选）
+```
+
+**离线导入配置**：复制 `config.example.json` 为 `config.json`，填写 Wi-Fi、API Host、API Key 和城市名称，插卡开机即可，无需进入配置页。`location`／经纬度可留空，设备首次联网时用城市名查询并写回卡上。也可以用脚本准备整张卡：
+
+```sh
+.venv/bin/python tools/prepare_sdcard.py /Volumes/卡名 --config my-config.json
+```
+
+脚本创建目录、复制模板与扩展字库（缺失时先运行 `generate_assets.py --sd-out` 生成），并检查配置字段。旧版本保存在 NVS 的配置和年度表会在首次插卡启动时迁移到卡上，然后从 NVS 删除；NVS 之后只保存天气缓存。
+
+## 纪念日
+
+在配置页“纪念日”中添加。**倒数日**显示“还有 N 天”（每年重复或仅一次，过后显示“已过 N 天”）；**经历日**显示“已经 N 天”。每年重复的日期可选按农历（如农历生日），农历三十在小月按廿九，公历 2 月 29 日在平年按 2 月 28 日。
+
+纪念日页为整屏：图片加顶部或底部文字条（名称、天数、日期／农历／周年），无图片时整屏为文字条颜色。倒数日当天、经历日首日、每满 100 天及每个周年当天，设备自动显示纪念日页；按 C 或长按 B 返回日历后当天不再自动切回。停留在纪念日页时整点唤醒只重绘天数，不联网更新天气。
+
+### 图片编辑
+
+浏览器端完成所有图像处理，设备只保存与显示结果：
+
+- 旋转、铺满裁剪／完整显示、缩放、拖动取景、留白颜色。
+- 预设（均衡、风景、人像、动漫、文档）与手动参数：曝光、亮度、对比度、饱和度、自然饱和度、色温、色调、伽马、清晰度、锐化、平滑度、色度保留。
+- **自动调色**：先做类似相机 ISP 的测光（中位亮度、受高光余量限制）、灰世界白平衡（避开肤色、天空、植物）与场景识别，再在 150×225 小图上试 9 组曝光／饱和度，用面板光学模拟（3×3 墨点混合、亮部脏点、层次压平）打分，选出这块屏最能还原的一组。
+- 抖色路径：**E6 Mix**（推荐，针对实测反射色优化）与 **Classic VED**。预览可切换实测色、理想色和原图。
+- 结果是 400×600、每字节两像素的帧缓冲，网页通过 `e6.wasm`（`imaging/` 中的 C 代码，固件内嵌约 36 KB）生成。
+
+保存时上传帧缓冲、原图和参数；名称有缺字时提示，屏幕上显示为 `?`。修改 `imaging/` 后重建 WASM：
+
+```sh
+brew install emscripten
+tools/build_wasm.sh
+```
+
+### 可选 AI 自动（ONNX）
+
+配置页是 `http://192.168.4.1`，不是安全上下文，浏览器不提供 WebGPU 和 SharedArrayBuffer，因此只能用 ONNX Runtime Web 的单线程 WASM 后端。运行时（约 14 MB）和模型放在卡上，首次加载较慢，之后由浏览器缓存：
+
+```sh
+.venv/bin/python tools/prepare_sdcard.py /Volumes/卡名 --ort \
+    --saliency-model u2netp.onnx --saliency-size 320 \
+    --saliency-mean 0.485 0.456 0.406 --saliency-std 0.229 0.224 0.225 \
+    --enhance-model my-enhancer.onnx --enhance-size 256
+```
+
+- **显著性模型**（输入 1×3×N×N，输出 1×1×N×N，如 U²-Netp）：用显著区域重心决定裁剪位置。
+- **增强模型**（输入输出均为 1×3×N×N、0–1 RGB 的图像到图像网络）：在低分辨率运行，拟合每通道色调曲线后作用于原图。
+
+模型只做预增强和取景，最终参数仍由上面的墨水屏模拟打分选出。项目不附带模型文件；请自行确认模型授权。`tests/onnx_fixture.py` 可生成测试用的极小模型。
 
 ## 按键与更新
 
 | 位置 | 按钮 | 短按 | 长按三秒 |
 | --- | --- | --- | --- |
-| 顶部 | C / GPIO1 | 回到今天并更新 | 进入配置 |
-| 侧边上方 | A / GPIO10 | 上月 | 无操作 |
-| 侧边下方 | B / GPIO9 | 下月 | 无操作 |
+| 顶部 | C / GPIO1 | 回到今天并更新（纪念日页时返回日历） | 进入配置 |
+| 侧边上方 | A / GPIO10 | 上月；纪念日页时上一个纪念日 | 无操作 |
+| 侧边下方 | B / GPIO9 | 下月；纪念日页时下一个纪念日 | 切换日历／纪念日页 |
 
 30 ms 消抖，800 ms 内翻月合并。刷新期间继续采集按键，C 清除已有翻月请求，配置请求优先。浏览时天气和大日期仍代表今天；五分钟后回到本月。电源按钮保留硬件原有行为。
 
@@ -104,17 +168,26 @@ python3 -m venv .venv
 .venv/bin/python tools/run_host_checks.py
 ```
 
-字号为 14／18／24 px，48／64／88 px 仅含数字与符号。18 px 包含源字体内 GB2312 汉字，14／24 px 按固定界面和天气词汇裁剪。18／24 px 另有 Medium 字重位图（`font*m.bin`），用于城市名、天气描述和室内温湿度；其余关键标题仍使用 Regular 位图的像素加粗绘制。日历节日名只做横向 1 px 加粗：18 px 下“重”等字没有空间容纳更粗的横画。缺字显示 `?`。资源生成依赖固定版本 Pillow、fonttools、lunar-python；已生成资源随项目保存，常规固件构建不需要这些 Python 包。
+TF 卡扩展字库为 18／24／36 px Regular，覆盖源字体内全部 CJK 统一汉字（含扩展 A）、日文假名、符号与全角字符，共约 2 万字、9.3 MB：
+
+```sh
+.venv/bin/python tools/generate_assets.py --sd-out sdcard/papercolor/fonts
+```
+
+查字顺序：内置字库 → 卡上同字号字库 → 36 px 退回 24 px → `?`。内置字形与卡上字形同源同阈值，常用字两者显示一致；卡上字库按需二分查找并缓存 512 个字形。
+
+内置字号为 14／18／24 px，48／64／88 px 仅含数字与符号。18 px 包含源字体内 GB2312 汉字，14／24 px 按固定界面和天气词汇裁剪。18／24 px 另有 Medium 字重位图（`font*m.bin`），用于城市名、天气描述和室内温湿度；其余关键标题仍使用 Regular 位图的像素加粗绘制。日历节日名只做横向 1 px 加粗：18 px 下“重”等字没有空间容纳更粗的横画。缺字显示 `?`。资源生成依赖固定版本 Pillow、fonttools、lunar-python；已生成资源随项目保存，常规固件构建不需要这些 Python 包。
 
 ## 测试与结构
 
-`main/board.c`：原生屏幕／电源／RTC／SHT40；`led.c`：RGB 状态灯；`buttons.c`：消抖与请求合并；`calendar.c`：公历、农历和年度表；`data.c`／`network.c`：天气解析及联网；`compression.c`：有界 Gzip 解压和校验；`storage.c`：NVS；`setup.c`／`web/`：配置服务；`render.c`：六色绘制；`M5PaperColor.c`：生命周期与睡眠。
+`main/board.c`：原生屏幕／电源／RTC／SHT40；`led.c`：RGB 状态灯；`buttons.c`：消抖与请求合并；`calendar.c`：公历、农历和年度表；`data.c`／`network.c`：天气解析及联网；`compression.c`：有界 Gzip 解压和校验；`sdcard.c`：TF 卡供电与挂载；`storage.c`：卡上文件（原子写入）与 NVS 天气缓存；`anniversary.c`：纪念日模型；`fonts.c`：卡上字库；`setup.c`／`web/`：配置服务与图片编辑器；`render.c`：六色绘制；`M5PaperColor.c`：生命周期与睡眠。`imaging/`：浏览器图像管线（编译为 `main/web/e6.wasm`）。
 
-主机测试直接编译实际可移植 C 模块，使用 AddressSanitizer／UndefinedBehaviorSanitizer，检查日期转换、闰月、除夕、跨年假期、补班、坏年度表、天气解析、按键合并、损坏 Gzip 和字库完整性，并输出 `docs/previews/` 图片。当前脚本面向 macOS（Mach-O 资源嵌入）；Gzip 主机测试用 zlib，设备使用 ESP32-S3 ROM miniz。
+主机测试直接编译实际可移植 C 模块，使用 AddressSanitizer／UndefinedBehaviorSanitizer，检查日期转换、闰月、除夕、跨年假期、补班、坏年度表、天气解析、按键合并、损坏 Gzip、纪念日（倒数／经历、农历、2 月 29 日、整百天）、卡上配置 JSON、城市解析、卡上字库与缺字、图像管线（纯色、确定性、白边干净、打分）和 WASM 冒烟测试，并输出 `docs/previews/` 图片（含 `anniv-*.png`）。当前脚本面向 macOS（Mach-O 资源嵌入）；Gzip 主机测试用 zlib，设备使用 ESP32-S3 ROM miniz。
 
 ```sh
-python3 tools/preview_server.py
-# 浏览 http://127.0.0.1:8765，使用模拟配置接口，不控制设备。
+python3 tools/preview_server.py            # 加 --no-card 模拟未插卡
+# 浏览 http://127.0.0.1:8765，使用模拟接口（含纪念日与图片上传，存于临时目录），不控制设备。
+# /sdweb/ 由 sdcard/papercolor/web/ 提供，可用于测试 ONNX。
 ```
 
 本地构建、逻辑测试和预览不能证明实机刷新／唤醒、真实和风天气账户权限或电池续航。本地验证记录见 [VALIDATION.md](docs/VALIDATION.md)。实机检查步骤见 [HARDWARE_CHECKLIST.md](docs/HARDWARE_CHECKLIST.md)，来源与授权见 [REFERENCES.md](docs/REFERENCES.md)。

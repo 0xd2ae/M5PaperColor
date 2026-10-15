@@ -67,10 +67,12 @@ esp_err_t pc_board_init(void)
     ESP_RETURN_ON_ERROR(write_reg(pm,0x0a,0),TAG,"pm watchdog");
     /* Main DC/DC remains on; charging on; RGB LDO and Grove boost off. */
     ESP_RETURN_ON_ERROR(update(pm,0x06,0x1c,0x03),TAG,"pm power");
-    ESP_RETURN_ON_ERROR(update(pm,0x16,0xc3,0),TAG,"epd/sd gpio function");
-    ESP_RETURN_ON_ERROR(update(pm,0x10,0,0x09),TAG,"epd/sd output");
-    ESP_RETURN_ON_ERROR(update(pm,0x13,0x09,0),TAG,"push pull");
-    ESP_RETURN_ON_ERROR(update(pm,0x11,0x09,0),TAG,"epd/sd off");
+    /* PYG0 EPD power, PYG3 SD power, PYG4 SD detect pull-up: outputs. PYG1 card detect: input. */
+    ESP_RETURN_ON_ERROR(update(pm,0x16,0xcf,0),TAG,"epd/sd gpio function");
+    ESP_RETURN_ON_ERROR(update(pm,0x17,0x03,0),TAG,"sd detect function");
+    ESP_RETURN_ON_ERROR(update(pm,0x10,0x02,0x19),TAG,"epd/sd direction");
+    ESP_RETURN_ON_ERROR(update(pm,0x13,0x19,0),TAG,"push pull");
+    ESP_RETURN_ON_ERROR(update(pm,0x11,0x19,0),TAG,"epd/sd off");
     ESP_RETURN_ON_ERROR(update(rtc,0x1f,0,0x30),TAG,"rtc battery");
     ESP_RETURN_ON_ERROR(write_reg(rtc,0x30,0),TAG,"rtc setup");
     ESP_RETURN_ON_ERROR(write_reg(rtc,0x1e,0),TAG,"rtc IRQ disable");
@@ -80,7 +82,7 @@ esp_err_t pc_board_init(void)
     gpio_set_level(44,1); gpio_set_level(47,1); gpio_set_level(45,0); gpio_set_level(46,0); gpio_set_level(12,0);
     gpio_set_direction(11,GPIO_MODE_INPUT); gpio_pullup_en(11);
     gpio_set_direction(7,GPIO_MODE_INPUT); gpio_pullup_en(7);
-    spi_bus_config_t spi={.mosi_io_num=13,.miso_io_num=-1,.sclk_io_num=15,
+    spi_bus_config_t spi={.mosi_io_num=13,.miso_io_num=14,.sclk_io_num=15,
         .quadwp_io_num=-1,.quadhd_io_num=-1,.max_transfer_sz=4096};
     ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST,&spi,SPI_DMA_CH_AUTO),TAG,"spi");
     spi_device_interface_config_t dc={.clock_speed_hz=4000000,.mode=0,.spics_io_num=-1,.queue_size=1};
@@ -92,12 +94,17 @@ static esp_err_t send_bytes(bool data,const uint8_t *bytes,size_t count)
     spi_transaction_t t={.length=count*8,.tx_buffer=bytes};
     return spi_device_polling_transmit(panel,&t);
 }
+/* The panel CS (G44) is manual, so hold the shared bus while it is low;
+ * otherwise SD transactions would clock into the panel. */
 static esp_err_t command(uint8_t cmd,const uint8_t *data,size_t count)
 {
+    esp_err_t err=spi_device_acquire_bus(panel,portMAX_DELAY);
+    if (err!=ESP_OK) return err;
     gpio_set_level(44,0);
-    esp_err_t err=send_bytes(false,&cmd,1);
+    err=send_bytes(false,&cmd,1);
     if (err==ESP_OK && count) err=send_bytes(true,data,count);
     gpio_set_level(44,1);
+    spi_device_release_bus(panel);
     return err;
 }
 static esp_err_t wait_ready(unsigned timeout_ms)
@@ -142,8 +149,10 @@ esp_err_t pc_epd_refresh(const uint8_t *pixels)
     uint8_t *chunk=heap_caps_malloc(4000,MALLOC_CAP_DMA);
     if (!chunk) return ESP_ERR_NO_MEM;
     uint8_t cmd=0x10;
+    esp_err_t err=spi_device_acquire_bus(panel,portMAX_DELAY);
+    if (err!=ESP_OK) { free(chunk); return err; }
     gpio_set_level(44,0);
-    esp_err_t err=send_bytes(false,&cmd,1);
+    err=send_bytes(false,&cmd,1);
     for (size_t offset=0;err==ESP_OK && offset<PC_PIXELS;offset+=8000) {
         size_t count=PC_PIXELS-offset; if (count>8000) count=8000;
         for (size_t i=0;i<count;i+=2) {
@@ -153,7 +162,7 @@ esp_err_t pc_epd_refresh(const uint8_t *pixels)
         }
         if (err==ESP_OK) err=send_bytes(true,chunk,count/2);
     }
-    gpio_set_level(44,1); free(chunk);
+    gpio_set_level(44,1); spi_device_release_bus(panel); free(chunk);
     const uint8_t booster[]={0x6f,0x1f,0x17,0x27},zero=0;
     if (err==ESP_OK) err=command(0x04,NULL,0);
     if (err==ESP_OK) err=wait_ready(10000);
@@ -172,8 +181,23 @@ esp_err_t pc_board_quiet(void)
     if (panel_ready) { uint8_t key=0xa5; err=command(0x07,&key,1); }
     panel_ready=false;
     gpio_set_level(12,0); gpio_set_level(45,0); gpio_set_level(46,0);
-    esp_err_t power=update(pm,0x11,0x09,0);
+    /* Don't back-power the unpowered card through its CS line. */
+    gpio_reset_pin(47); gpio_set_direction(47,GPIO_MODE_OUTPUT); gpio_set_level(47,0);
+    esp_err_t power=update(pm,0x11,0x19,0);
     return err==ESP_OK ? power : err;
+}
+esp_err_t pc_board_sd_power(bool on)
+{
+    if (!on) return update(pm,0x11,0x18,0);
+    gpio_set_level(47,1);
+    return update(pm,0x11,0,0x18);
+}
+esp_err_t pc_board_sd_detect(bool *low)
+{
+    uint8_t value;
+    ESP_RETURN_ON_ERROR(read_reg(pm,0x12,&value,1),TAG,"pm gpio in");
+    *low=!(value&0x02);
+    return ESP_OK;
 }
 static bool from_bcd(uint8_t value,int *out)
 {

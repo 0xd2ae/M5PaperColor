@@ -1,6 +1,8 @@
 #include "model.h"
 #include "buttons.h"
 #include "render.h"
+#include "anniversary.h"
+#include "fonts.h"
 #include "compression.h"
 #include "cJSON.h"
 #include <assert.h>
@@ -71,6 +73,10 @@ static void button_tests(void)
     assert(!pc_buttons_update(&s,0,4100)); assert(!pc_buttons_update(&s,0,4130));
     assert(!pc_buttons_update(&s,2,5000)); assert(!pc_buttons_update(&s,2,5030));
     assert(!pc_buttons_update(&s,0,5100)); assert(pc_buttons_update(&s,0,5130)==PC_ACTION_NEXT);
+    /* Long B toggles the anniversary page and does not also step forward on release. */
+    assert(!pc_buttons_update(&s,2,6000)); assert(!pc_buttons_update(&s,2,6030));
+    assert(pc_buttons_update(&s,2,9030)==PC_ACTION_PAGE); assert(!pc_buttons_update(&s,2,9500));
+    assert(!pc_buttons_update(&s,0,9600)); assert(!pc_buttons_update(&s,0,9630));
 }
 static void action_tests(void)
 {
@@ -85,6 +91,114 @@ static void action_tests(void)
     assert(pc_actions_take(&pending,4100000,&out) && out.today && out.delta==1);
     pc_actions_add(&pending,PC_ACTION_NEXT,4200000); pc_actions_add(&pending,PC_ACTION_SETUP,4300000);
     assert(pc_actions_take(&pending,5100000,&out) && out.setup && !out.today && !out.delta);
+    pc_actions_add(&pending,PC_ACTION_NEXT,6000000); pc_actions_add(&pending,PC_ACTION_PAGE,6100000);
+    assert(pc_actions_take(&pending,7000000,&out) && out.page && !out.delta);
+    pc_actions_add(&pending,PC_ACTION_PAGE,7100000); pc_actions_add(&pending,PC_ACTION_PAGE,7200000);
+    assert(!pc_actions_take(&pending,8100000,&out));
+    pc_actions_add(&pending,PC_ACTION_PAGE,8200000); pc_actions_add(&pending,PC_ACTION_SETUP,8300000);
+    assert(pc_actions_take(&pending,9200000,&out) && out.setup && !out.page);
+}
+static pc_anniversary_t anniversary(const char *json)
+{
+    pc_anniversary_t a; char error[96];
+    if (!pc_anniversary_parse_item(json,&a,error,sizeof(error))) { fprintf(stderr,"%s: %s\n",json,error); assert(0); }
+    return a;
+}
+static void anniversary_tests(void)
+{
+    pc_anniv_status_t s; char error[96]; pc_anniversary_t a;
+    a=anniversary("{\"id\":\"wed\",\"name\":\"结婚纪念日\",\"date\":\"2020-05-20\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"lunar\":null,\"image\":true,\"overlay\":\"top\",\"band\":\"red\"}");
+    assert(a.image && a.overlay_top && a.band==PC_RED && a.yearly && !a.lunar);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,10,15},&s) && s.state==PC_ANNIV_UPCOMING && s.days==217 && s.years==7);
+    assert(s.next.year==2027 && s.next.month==5 && s.next.day==20 && !s.celebrate);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,5,20},&s) && s.state==PC_ANNIV_TODAY && s.days==0 && s.years==6 && s.celebrate);
+    /* Feb 29 falls back to Feb 28 in common years. */
+    a=anniversary("{\"id\":\"leap\",\"name\":\"闰日\",\"date\":\"2024-02-29\",\"mode\":\"countdown\",\"repeat\":\"yearly\"}");
+    assert(pc_anniversary_status(&a,(pc_date_t){2027,2,1},&s) && s.days==27 && s.next.day==28 && s.years==3);
+    assert(pc_anniversary_status(&a,(pc_date_t){2028,2,28},&s) && s.days==1 && s.next.day==29);
+    /* One-off countdown: upcoming, today, then passed. */
+    a=anniversary("{\"id\":\"exam\",\"name\":\"考试\",\"date\":\"2026-12-20\",\"mode\":\"countdown\",\"repeat\":\"once\"}");
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,12,10},&s) && s.state==PC_ANNIV_UPCOMING && s.days==10);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,12,25},&s) && s.state==PC_ANNIV_PASSED && s.days==5 && !s.celebrate);
+    /* Elapsed: day 0, every 100 days and yearly anniversaries are celebrated. */
+    a=anniversary("{\"id\":\"baby\",\"name\":\"宝宝\",\"date\":\"2026-01-01\",\"mode\":\"elapsed\",\"repeat\":\"yearly\"}");
+    assert(pc_anniversary_status(&a,(pc_date_t){2025,12,30},&s) && s.state==PC_ANNIV_UPCOMING && s.days==2);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,1,1},&s) && s.state==PC_ANNIV_TODAY && s.celebrate);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,4,11},&s) && s.state==PC_ANNIV_SINCE && s.days==100 && s.celebrate);
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,4,12},&s) && s.days==101 && !s.celebrate);
+    assert(pc_anniversary_status(&a,(pc_date_t){2027,1,1},&s) && s.days==365 && s.years==1 && s.celebrate);
+    /* Lunar yearly: 正月初一 2026 is 2026-02-17; a lunar 30th falls back to the 29th (除夕 2026-02-16). */
+    a=anniversary("{\"id\":\"lny\",\"name\":\"农历生日\",\"date\":\"2000-02-05\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"lunar\":{\"month\":1,\"day\":1}}");
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,2,10},&s) && s.days==7 && s.next.month==2 && s.next.day==17 && s.years==26);
+    a=anniversary("{\"id\":\"eve\",\"name\":\"除夕\",\"date\":\"2000-02-04\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"lunar\":{\"month\":12,\"day\":30}}");
+    assert(pc_anniversary_status(&a,(pc_date_t){2026,1,20},&s) && s.next.year==2026 && s.next.month==2 && s.next.day==16);
+    /* Rejected input. */
+    assert(!pc_anniversary_parse_item("{\"id\":\"Bad\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"once\"}",&a,error,sizeof(error)));
+    assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-02-30\",\"mode\":\"countdown\",\"repeat\":\"once\"}",&a,error,sizeof(error)));
+    assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"once\",\"lunar\":{\"month\":1,\"day\":1}}",&a,error,sizeof(error)));
+    assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"once\",\"band\":\"pink\"}",&a,error,sizeof(error)));
+    assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"\\u00ff\\u00fe\",\"date\":\"2026-01-01\",\"mode\":\"sideways\",\"repeat\":\"once\"}",&a,error,sizeof(error)));
+    /* List round trip, upsert, remove and capacity. */
+    pc_anniversaries_t *list=calloc(1,sizeof(*list)),*again=calloc(1,sizeof(*again)); assert(list && again);
+    char id[17];
+    for (int i=0;i<PC_ANNIV_MAX;i++) {
+        pc_anniversary_t item=anniversary("{\"id\":\"x\",\"name\":\"名\",\"date\":\"2026-01-01\",\"mode\":\"elapsed\",\"repeat\":\"once\"}");
+        snprintf(id,sizeof(id),"x%d",i); strcpy(item.id,id); assert(pc_anniversaries_upsert(list,&item));
+    }
+    assert(!pc_anniversaries_upsert(list,&a)); assert(pc_anniversaries_upsert(list,&list->items[3]));
+    char *json=pc_anniversaries_json(list); assert(json);
+    assert(pc_anniversaries_parse(json,again,error,sizeof(error)) && again->count==PC_ANNIV_MAX);
+    assert(!memcmp(list,again,sizeof(*list))); free(json);
+    assert(pc_anniversaries_remove(list,"x0") && list->count==PC_ANNIV_MAX-1 && !strcmp(list->items[0].id,"x1"));
+    assert(!pc_anniversaries_remove(list,"x0"));
+    assert(pc_anniversaries_today(list,(pc_date_t){2026,1,1})==0);
+    assert(pc_anniversaries_today(list,(pc_date_t){2026,1,2})==-1);
+    assert(!pc_anniversaries_parse("[{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"elapsed\",\"repeat\":\"once\"},{\"id\":\"a\",\"name\":\"y\",\"date\":\"2026-01-01\",\"mode\":\"elapsed\",\"repeat\":\"once\"}]",again,error,sizeof(error)));
+    assert(!pc_anniversaries_parse("{}",again,error,sizeof(error)));
+    free(list); free(again);
+    uint8_t *packed=malloc(PC_PACKED_BYTES),*pixels=malloc(PC_PIXELS); assert(packed && pixels);
+    memset(packed,0x25,PC_PACKED_BYTES); assert(pc_packed_valid(packed));
+    pc_packed_unpack(packed,pixels); assert(pixels[0]==PC_RED && pixels[1]==PC_GREEN && pixels[PC_PIXELS-1]==PC_GREEN);
+    packed[PC_PACKED_BYTES-1]=0x26; assert(!pc_packed_valid(packed));
+    free(packed); free(pixels);
+}
+static void config_tests(void)
+{
+    pc_config_t c={0},back;
+    strcpy(c.ssid,"Home"); strcpy(c.password,"password1"); strcpy(c.host,"abc.qweatherapi.com"); strcpy(c.api_key,"KEY_123-x");
+    strcpy(c.city,"深圳"); assert(pc_config_resolvable(&c)); assert(!pc_config_valid(&c));
+    strcpy(c.location,"101280601"); c.latitude=22.54; c.longitude=114.06; c.coordinates=true; assert(pc_config_valid(&c));
+    char *json=pc_config_to_json(&c); assert(json);
+    assert(pc_config_from_json(json,&back)); free(json);
+    assert(!strcmp(back.ssid,c.ssid) && !strcmp(back.password,c.password) && !strcmp(back.api_key,c.api_key));
+    assert(!strcmp(back.city,"深圳") && !strcmp(back.location,"101280601") && back.coordinates && back.latitude==22.54);
+    /* The card example: name only, coordinates resolved on first connection. */
+    char *example=read_file("sdcard/papercolor/config.example.json");
+    assert(pc_config_from_json(example,&back) && !back.coordinates && !strcmp(back.city,"深圳") && !pc_config_valid(&back));
+    free(example);
+    assert(!pc_config_from_json("[",&back) && !pc_config_from_json("[]",&back));
+    strcpy(c.password,"short"); assert(!pc_config_resolvable(&c));
+    strcpy(c.password,""); strcpy(c.api_key,"bad key"); assert(!pc_config_resolvable(&c));
+    pc_config_t city={0};
+    assert(pc_city_parse("{\"code\":\"200\",\"location\":[{\"id\":\"1\",\"name\":\"Tokyo\",\"lat\":\"35\",\"lon\":\"139\",\"tz\":\"Asia/Tokyo\"},"
+        "{\"id\":\"101280601\",\"name\":\"深圳\",\"lat\":\"22.54\",\"lon\":\"114.06\",\"tz\":\"Asia/Shanghai\"}]}",&city));
+    assert(!strcmp(city.location,"101280601") && city.coordinates && city.longitude==114.06);
+    assert(!pc_city_parse("{\"code\":\"404\"}",&city));
+}
+static void font_tests(void)
+{
+    char missing[97];
+    pc_fonts_open(NULL);
+    /* 璨 is GB2312 (built-in 18 px) but not in the UI subset used for 24/36. */
+    assert(pc_render_missing("璨",18,missing,sizeof(missing))==0);
+    assert(pc_render_missing("璨a",36,missing,sizeof(missing))==1 && !strcmp(missing,"璨"));
+    assert(pc_render_missing("𠀀",18,missing,sizeof(missing))==1);
+    /* run_host_checks.py copies the 18 px pack as a fake 36 px card font. */
+    pc_fonts_open("tests/.build/cardfonts");
+    assert(pc_fonts_available(36) && !pc_fonts_available(24) && !pc_fonts_available(14));
+    assert(pc_fonts_has(36,0x74a8) && !pc_fonts_has(36,0x20000));
+    pc_glyph_t g; assert(pc_fonts_glyph(36,0x74a8,&g) && g.w && g.runs);
+    assert(pc_render_missing("璨𠀀璨",36,missing,sizeof(missing))==1 && !strcmp(missing,"𠀀"));
 }
 static void weather_tests(void)
 {
@@ -149,9 +263,78 @@ static void previews(pc_holidays_t *table)
     }
     free(pixels);
 }
+static void save_raw(const char *name,const uint8_t *pixels)
+{
+    char path[100]; snprintf(path,sizeof(path),"tests/.build/%s.raw",name);
+    FILE *f=fopen(path,"wb"); assert(f); assert(fwrite(pixels,1,PC_PIXELS,f)==PC_PIXELS); fclose(f);
+}
+static void draft_tests(void)
+{
+    uint8_t *pixels=malloc(PC_PIXELS),*back=malloc(PC_PIXELS),*body=malloc(PC_DRAFT_MAX_BODY+1);
+    assert(pixels && back && body);
+    for (int i=0;i<PC_PIXELS;i++) pixels[i]=(i*7+i/400)%6;
+    const char *json="{\"id\":\"wed\",\"name\":\"结婚纪念日\",\"date\":\"2020-05-20\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"image\":true}";
+    size_t n=strlen(json);
+    body[0]=n&255; body[1]=n>>8; memcpy(body+2,json,n);
+    pc_packed_pack(pixels,body+2+n);
+    assert(pc_packed_valid(body+2+n));
+    pc_packed_unpack(body+2+n,back); assert(!memcmp(pixels,back,PC_PIXELS));
+    pc_anniversary_t item; const uint8_t *image; char error[96];
+    assert(pc_draft_parse(body,2+n+PC_PACKED_BYTES,&item,&image,error,sizeof(error)) && image==body+2+n && item.image);
+    assert(pc_draft_parse(body,2+n,&item,&image,error,sizeof(error)) && !image);
+    /* Truncated image, trailing byte, short header, zero or oversized JSON length, colour 6, bad JSON. */
+    assert(!pc_draft_parse(body,2+n+PC_PACKED_BYTES-1,&item,&image,error,sizeof(error)));
+    assert(!pc_draft_parse(body,2+n+1,&item,&image,error,sizeof(error)));
+    assert(!pc_draft_parse(body,1,&item,&image,error,sizeof(error)));
+    assert(!pc_draft_parse(body,n,&item,&image,error,sizeof(error)));
+    body[0]=0; body[1]=0; assert(!pc_draft_parse(body,2+n,&item,&image,error,sizeof(error)));
+    body[0]=(PC_DRAFT_MAX_JSON+1)&255; body[1]=(PC_DRAFT_MAX_JSON+1)>>8;
+    assert(!pc_draft_parse(body,PC_DRAFT_MAX_BODY,&item,&image,error,sizeof(error)));
+    body[0]=n&255; body[1]=n>>8; body[2+n+77]=0x60;
+    assert(!pc_draft_parse(body,2+n+PC_PACKED_BYTES,&item,&image,error,sizeof(error)));
+    body[2]='['; assert(!pc_draft_parse(body,2+n,&item,&image,error,sizeof(error)));
+    free(pixels); free(back); free(body);
+}
+static void anniversary_previews(void)
+{
+    uint8_t *pixels=malloc(PC_PIXELS),*packed=malloc(PC_PACKED_BYTES); assert(pixels && packed);
+    /* Real card fonts when generated (tools/prepare_sdcard.py), otherwise the fake 36 px pack. */
+    pc_fonts_open("sdcard/papercolor/fonts");
+    if (!pc_fonts_available(36)) pc_fonts_open("tests/.build/cardfonts");
+    /* Stand-in photo: the imaging pipeline's own output when present, else colour bars. */
+    FILE *f=fopen("tests/.build/e6-mix.raw","rb");
+    if (f) {
+        uint8_t *idx=malloc(PC_PIXELS); assert(idx && fread(idx,1,PC_PIXELS,f)==PC_PIXELS); fclose(f);
+        for (int i=0;i<PC_PACKED_BYTES;i++) packed[i]=idx[2*i]<<4|idx[2*i+1];
+        free(idx);
+    } else for (int i=0;i<PC_PACKED_BYTES;i++) { int c=(i*2%PC_WIDTH)/67; packed[i]=c<<4|c; }
+    pc_anniversary_t wed=anniversary("{\"id\":\"wed\",\"name\":\"结婚纪念日\",\"date\":\"2020-05-20\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"image\":true,\"band\":\"white\"}");
+    pc_anniversary_t baby=anniversary("{\"id\":\"baby\",\"name\":\"宝宝来到我们家\",\"date\":\"2026-01-01\",\"mode\":\"elapsed\",\"repeat\":\"yearly\",\"band\":\"yellow\"}");
+    pc_anniversary_t lny=anniversary("{\"id\":\"mom\",\"name\":\"妈妈生日\",\"date\":\"1960-02-28\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"lunar\":{\"month\":2,\"day\":3},\"image\":true,\"overlay\":\"top\",\"band\":\"red\"}");
+    pc_anniversary_t old=anniversary("{\"id\":\"since\",\"name\":\"一个非常非常非常长的纪念日名称会被截断\",\"date\":\"1990-01-01\",\"mode\":\"elapsed\",\"repeat\":\"once\",\"band\":\"blue\"}");
+    struct { const char *name; const pc_anniversary_t *a; pc_date_t today; bool card, image; int battery; } cases[]={
+        {"anniv-photo",&wed,{2026,10,15},true,true,80},
+        {"anniv-today",&baby,{2026,4,11},true,false,80},
+        {"anniv-lunar-top",&lny,{2026,10,15},true,true,12},
+        {"anniv-long",&old,{2026,10,15},true,false,80},
+        {"anniv-empty",NULL,{2026,10,15},true,false,80},
+        {"anniv-no-card",NULL,{2026,10,15},false,false,80},
+    };
+    for (size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++) {
+        pc_anniv_screen_t s={.today=cases[i].today,.time_valid=true,.card=cases[i].card,.item=cases[i].a,.index=i,.count=4,.battery_percent=cases[i].battery};
+        if (s.item) assert(pc_anniversary_status(s.item,s.today,&s.status));
+        memset(pixels,0x7f,PC_PIXELS);
+        pc_render_anniversary(pixels,&s,cases[i].image?packed:NULL);
+        for (int p=0;p<PC_PIXELS;p++) assert(pixels[p]<6);
+        save_raw(cases[i].name,pixels);
+    }
+    free(pixels); free(packed);
+}
 int main(void)
 {
     setenv("TZ","CST-8",1); tzset();
-    calendar_tests(); pc_holidays_t *table=holiday_tests(); button_tests(); action_tests(); weather_tests(); gzip_tests(); icon_tests(); previews(table); pc_holidays_free(table);
-    puts("Calendar, holidays, buttons, weather and render checks passed");
+    calendar_tests(); pc_holidays_t *table=holiday_tests(); button_tests(); action_tests(); weather_tests(); gzip_tests(); icon_tests();
+    anniversary_tests(); draft_tests(); config_tests(); font_tests(); previews(table); anniversary_previews(); pc_holidays_free(table);
+    pc_fonts_open(NULL);
+    puts("Calendar, holidays, buttons, weather, anniversary, config, font and render checks passed");
 }

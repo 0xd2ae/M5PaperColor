@@ -1,4 +1,5 @@
 #include "render.h"
+#include "fonts.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -13,17 +14,36 @@ static uint32_t le32(const uint8_t *p) { return p[0]|((uint32_t)p[1]<<8)|((uint3
 static uint16_t le16(const uint8_t *p) { return p[0]|(p[1]<<8); }
 static const uint8_t *font_for(int size)
 {
-    switch (size) { case 14:return font14; case 24:return font24; case 48:return font48; case 64:return font64; case 88:return font88; default:return font18; }
+    switch (size) { case 14:return font14; case 18:return font18; case 24:return font24; case 48:return font48; case 64:return font64; case 88:return font88; default:return NULL; }
 }
-static const uint8_t *find(const uint8_t *font,uint32_t cp)
+static bool pack_glyph(const uint8_t *font,uint32_t cp,pc_glyph_t *g)
 {
+    if (!font) return false;
     int lo=0,hi=le32(font+8)-1;
     while (lo<=hi) {
         int mid=(lo+hi)/2; const uint8_t *p=font+12+mid*20; uint32_t code=le32(p);
-        if (cp==code) return p;
+        if (cp==code) {
+            *g=(pc_glyph_t){p[10],p[11],p[12],(int8_t)p[13],(int8_t)p[14],le16(p+8),font+12+le32(font+8)*20+le32(p+4)};
+            return true;
+        }
         if (cp<code) hi=mid-1; else lo=mid+1;
     }
-    return NULL;
+    return false;
+}
+/* Built-in packs and card packs come from the same source font and thresholds, so the order only affects speed. */
+static bool lookup(const uint8_t *font,int size,uint32_t cp,pc_glyph_t *g)
+{
+    if (pack_glyph(font,cp,g) || pc_fonts_glyph(size,cp,g) || pack_glyph(font_for(size),cp,g)) return true;
+    return size==36 && lookup(font24,24,cp,g);
+}
+static bool find(const uint8_t *font,int size,uint32_t cp,pc_glyph_t *g)
+{
+    return lookup(font,size,cp,g) || lookup(font,size,'?',g);
+}
+static int ascent(int size)
+{
+    const uint8_t *font=font_for(size);
+    return font ? le16(font+6) : (le16(font24+6)*size+12)/24;
 }
 static uint32_t next_utf8(const char **text)
 {
@@ -57,38 +77,48 @@ static const uint8_t *medium_font_for(int size)
 {
     switch (size) { case 24:return font24m; case 18:return font18m; default:return font_for(size); }
 }
-static int font_width(const uint8_t *font,const char *str)
-{
-    int width=0;
-    while (*str) { const uint8_t *g=find(font,next_utf8(&str)); if (!g) g=find(font,'?'); if (g) width+=g[12]; }
-    return width;
-}
 static int text_width(const char *str,int size)
 {
-    return font_width(font_for(size),str);
+    int width=0; pc_glyph_t g;
+    while (*str) if (find(font_for(size),size,next_utf8(&str),&g)) width+=g.advance;
+    return width;
 }
-static void font_text(uint8_t *pixels,const uint8_t *font,int x,int y,const char *str,pc_color_t color,int max_width)
+static void font_text(uint8_t *pixels,const uint8_t *font,int size,int x,int y,const char *str,pc_color_t color,int max_width)
 {
-    int start=x;
-    const uint8_t *data=font+12+le32(font+8)*20;
+    int start=x; pc_glyph_t g;
     while (*str) {
-        const uint8_t *g=find(font,next_utf8(&str)); if (!g) g=find(font,'?');
-        if (!g) continue;
-        int advance=g[12],w=g[10],h=g[11];
-        if (x+advance>start+max_width) break;
-        int gx=x+(int8_t)g[13],gy=y+(int8_t)g[14],offset=0;
-        const uint8_t *bitmap=data+le32(g+4);
-        for (int i=0;i<le16(g+8);i++) {
-            int run=bitmap[i]&127;
-            if (bitmap[i]&128) for (int j=0;j<run && offset+j<w*h;j++) pixel(pixels,gx+(offset+j)%w,gy+(offset+j)/w,color);
+        if (!find(font,size,next_utf8(&str),&g)) continue;
+        int w=g.w,h=g.h;
+        if (x+g.advance>start+max_width) break;
+        int gx=x+g.x,gy=y+g.y,offset=0;
+        for (int i=0;i<g.runs;i++) {
+            int run=g.bitmap[i]&127;
+            if (g.bitmap[i]&128) for (int j=0;j<run && offset+j<w*h;j++) pixel(pixels,gx+(offset+j)%w,gy+(offset+j)/w,color);
             offset+=run;
         }
-        x+=advance;
+        x+=g.advance;
     }
 }
 static void text(uint8_t *pixels,int x,int y,const char *str,int size,pc_color_t color,int max_width)
 {
-    font_text(pixels,font_for(size),x,y,str,color,max_width);
+    font_text(pixels,font_for(size),size,x,y,str,color,max_width);
+}
+size_t pc_render_missing(const char *str,int size,char *out,size_t capacity)
+{
+    size_t used=0,count=0; pc_glyph_t g;
+    if (capacity) out[0]=0;
+    while (*str) {
+        const char *start=str; uint32_t cp=next_utf8(&str);
+        if (cp<0x20 || pack_glyph(font_for(size),cp,&g) || pc_fonts_has(size,cp) ||
+            (size==36 && (pack_glyph(font24,cp,&g) || pc_fonts_has(24,cp)))) continue;
+        size_t n=str-start;
+        bool seen=false;
+        for (size_t i=0;i+n<=used && !seen;i++) seen=!memcmp(out+i,start,n);
+        if (seen) continue;
+        count++;
+        if (used+n<capacity) { memcpy(out+used,start,n); used+=n; out[used]=0; }
+    }
+    return count;
 }
 static void centered(uint8_t *p,int cx,int y,const char *str,int size,pc_color_t color,int width)
 {
@@ -97,7 +127,7 @@ static void centered(uint8_t *p,int cx,int y,const char *str,int size,pc_color_t
 }
 static void medium_text(uint8_t *p,int x,int y,const char *str,int size,pc_color_t color,int width)
 {
-    font_text(p,medium_font_for(size),x,y,str,color,width);
+    font_text(p,medium_font_for(size),size,x,y,str,color,width);
 }
 static void bold_text(uint8_t *p,int x,int y,const char *str,int size,pc_color_t color,int width)
 {
@@ -163,7 +193,8 @@ static void render_header(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *h
     int right=384-text_width(buf,14)-1;
     bold_text(p,right,9,buf,14,PC_BLACK,384-right);
     const char *status="";
-    if (s->time_valid && !pc_holidays_has_year(holidays,s->view_year)) status="调休数据未导入";
+    if (s->card_missing) status="未插卡";
+    else if (s->time_valid && !pc_holidays_has_year(holidays,s->view_year)) status="调休数据未导入";
     else if (s->time_valid && s->weather.valid && time(NULL)-s->weather.fetched>10800) status="天气已过期";
     else if (s->time_valid && s->offline) status="离线";
     if (*status) {
@@ -304,8 +335,9 @@ static void render_month(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *ho
         else centered(p,cx,top+25,buf,14,lunar_color,50);
     }
 }
-static void render_setup(uint8_t *p)
+static void render_setup(uint8_t *p,bool card_missing)
 {
+    if (card_missing) bold_text(p,32,516,"未插 TF 卡：配置无法保存",18,PC_RED,336);
     rect(p,12,244,376,348,PC_WHITE);
     outline_rect(p,12,244,376,348,PC_BLUE,3);
     bold_text(p,32,268,"手机连接开放热点",24,PC_BLUE,336);
@@ -322,5 +354,81 @@ void pc_render(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *holidays)
     render_weather(p,s);
     render_today(p,s,holidays);
     if (s->time_valid) render_month(p,s,holidays);
-    if (s->configuring) render_setup(p);
+    if (s->configuring) render_setup(p,s->card_missing);
+}
+static pc_color_t ink_on(pc_color_t band) { return band==PC_WHITE||band==PC_YELLOW?PC_BLACK:PC_WHITE; }
+static void fitted_centered(uint8_t *p,int y,const char *str,int size,pc_color_t color,bool bold)
+{
+    int limit=368,w=text_width(str,size);
+    if (w>limit) {
+        int dots=text_width("…",size);
+        int x=16;
+        if (bold) bold_text(p,x,y,str,size,color,limit-dots); else text(p,x,y,str,size,color,limit-dots);
+        /* Truncation stops at a whole glyph; place the ellipsis after the drawn part. */
+        const char *s=str; int used=0; pc_glyph_t g;
+        while (*s && find(font_for(size),size,next_utf8(&s),&g) && used+g.advance<=limit-dots) used+=g.advance;
+        text(p,x+used,y,"…",size,color,dots+1);
+        return;
+    }
+    if (bold) bold_centered(p,200,y,str,size,color,limit); else centered(p,200,y,str,size,color,limit);
+}
+static void render_message(uint8_t *p,const char *title,const char *line1,const char *line2)
+{
+    memset(p,PC_WHITE,PC_PIXELS);
+    outline_rect(p,16,16,368,568,PC_BLUE,3);
+    fitted_centered(p,236,title,36,PC_BLUE,true);
+    fitted_centered(p,300,line1,18,PC_BLACK,false);
+    fitted_centered(p,330,line2,18,PC_BLACK,false);
+}
+void pc_render_anniversary(uint8_t *p,const pc_anniv_screen_t *s,const uint8_t *packed)
+{
+    if (!s->card) { render_message(p,"未检测到 TF 卡","纪念日、图片与配置保存在卡上","插卡后按顶部 C 刷新"); return; }
+    if (!s->item) { render_message(p,"还没有纪念日","长按顶部 C 三秒进入配置","在网页中添加纪念日与图片"); return; }
+    const pc_anniversary_t *a=s->item;
+    const int h=184;
+    int y0;
+    if (packed) {
+        pc_packed_unpack(packed,p);
+        y0=a->overlay_top?0:PC_HEIGHT-h;
+        rect(p,0,y0,PC_WIDTH,h,a->band);
+        rect(p,0,a->overlay_top?y0+h:y0-3,PC_WIDTH,3,a->band==PC_BLACK?PC_WHITE:PC_BLACK);
+    } else {
+        memset(p,a->band,PC_PIXELS);
+        y0=(PC_HEIGHT-h)/2;
+    }
+    pc_color_t ink=ink_on(a->band),accent=a->band==PC_WHITE?PC_RED:ink;
+    char buf[64];
+    if (s->count>1) {
+        snprintf(buf,sizeof(buf),"%d/%d",s->index+1,s->count);
+        text(p,384-text_width(buf,14),y0+8,buf,14,ink,60);
+    }
+    if (s->battery_percent>=0 && s->battery_percent<=20) bold_text(p,16,y0+8,"电量低",14,a->band==PC_RED?ink:PC_RED,60);
+    fitted_centered(p,y0+22,a->name,36,ink,true);
+    if (!s->time_valid) { fitted_centered(p,y0+92,"等待校时",36,accent,true); return; }
+    const pc_anniv_status_t *st=&s->status;
+    int baseline=y0+142;
+    if (st->state==PC_ANNIV_TODAY) fitted_centered(p,baseline-ascent(36),"就是今天",36,accent,true);
+    else {
+        const char *prefix=st->state==PC_ANNIV_UPCOMING?"还有":st->state==PC_ANNIV_PASSED?"已过":"已经";
+        char number[16]; snprintf(number,sizeof(number),"%d",st->days);
+        int big=strlen(number)>4?64:88;
+        int wp=text_width(prefix,24),wn=text_width(number,big),ws=text_width("天",24);
+        int x=200-(wp+wn+ws+16)/2;
+        bold_text(p,x,baseline-ascent(24),prefix,24,ink,wp+2);
+        bold_text(p,x+wp+8,baseline-ascent(big),number,big,accent,wn+2);
+        bold_text(p,x+wp+wn+16,baseline-ascent(24),"天",24,ink,ws+2);
+    }
+    char detail[96]=""; char lunar[48]="";
+    if (a->lunar && a->yearly) {
+        pc_lunar_label(st->next,true,lunar,sizeof(lunar));
+        const char *day=strchr(lunar,' ');
+        memmove(lunar,day?day+1:lunar,strlen(day?day+1:lunar)+1);
+    }
+    pc_date_t d=a->mode==PC_ANNIV_ELAPSED?a->date:st->next;
+    snprintf(buf,sizeof(buf),"%s%d年%d月%d日",a->mode==PC_ANNIV_ELAPSED?"始于 ":"",d.year,d.month,d.day);
+    snprintf(detail,sizeof(detail),"%s",buf);
+    if (*lunar && a->mode==PC_ANNIV_COUNTDOWN) snprintf(detail+strlen(detail),sizeof(detail)-strlen(detail)," · 农历%s",lunar);
+    if (a->yearly && st->years>0 && (a->mode==PC_ANNIV_COUNTDOWN || pc_day_number(st->next)==pc_day_number(s->today)))
+        snprintf(detail+strlen(detail),sizeof(detail)-strlen(detail)," · %d 周年",st->years);
+    fitted_centered(p,y0+152,detail,18,ink,false);
 }

@@ -4,4 +4,8 @@
 __pycache__/
 /sdkconfig.old
 /tests/.build/
+# TF-card staging: only the credential-free example is tracked.
+/sdcard/**
+!/sdcard/papercolor/
+!/sdcard/papercolor/config.example.json
 /.vscode/

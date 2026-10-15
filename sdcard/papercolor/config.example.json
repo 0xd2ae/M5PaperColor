@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "wifi": {
+    "ssid": "your-2.4GHz-wifi",
+    "password": "your-wifi-password"
+  },
+  "qweather": {
+    "host": "xxxxxx.qweatherapi.com",
+    "api_key": "your-qweather-api-key"
+  },
+  "city": {
+    "name": "深圳",
+    "location": "",
+    "latitude": null,
+    "longitude": null
+  }
+}
