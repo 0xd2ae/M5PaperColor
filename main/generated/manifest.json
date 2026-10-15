@@ -1,0 +1,54 @@
+{
+  "source_sha256": "9737d7efe43e6a49ede3c563fe4d436f763db9be1e403a37b9613c2ab30e8cfb",
+  "source_url": "https://github.com/lxgw/LxgwWenKai-Lite",
+  "source_version": "Version 1.530; October 13, 2026",
+  "medium_sha256": "243e0b02da1137b45e925032c1c8773b86d04100732ec221df60a239075e2f40",
+  "medium_version": "Version 1.530; October 13, 2026",
+  "bitmap_family": "PaperCalendarBitmap",
+  "fonts": {
+    "14": {
+      "glyphs": 429,
+      "bytes": 27803
+    },
+    "18": {
+      "glyphs": 6873,
+      "bytes": 710740
+    },
+    "18m": {
+      "glyphs": 6873,
+      "bytes": 672152
+    },
+    "24": {
+      "glyphs": 429,
+      "bytes": 44607
+    },
+    "24m": {
+      "glyphs": 429,
+      "bytes": 43270
+    },
+    "48": {
+      "glyphs": 14,
+      "bytes": 1529
+    },
+    "64": {
+      "glyphs": 14,
+      "bytes": 1931
+    },
+    "88": {
+      "glyphs": 14,
+      "bytes": 2571
+    }
+  },
+  "lunar": {
+    "first": "2000-01-01",
+    "last": "2099-12-31",
+    "bytes": 146100,
+    "generator": "lunar-python 1.4.8"
+  },
+  "terms": {
+    "first": 2000,
+    "last": 2099,
+    "bytes": 2400,
+    "layout": "24 day-of-month bytes per year, 小寒 first"
+  }
+}

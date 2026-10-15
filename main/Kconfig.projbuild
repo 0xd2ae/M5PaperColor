@@ -1,0 +1,5 @@
+menu "PaperColor calendar"
+    config PC_PANEL_TEST
+        bool "Display six-color hardware test instead of calendar"
+        default n
+endmenu

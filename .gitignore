@@ -1,0 +1,7 @@
+/build/
+/build-calendar/
+/.venv/
+__pycache__/
+/sdkconfig.old
+/tests/.build/
+/.vscode/

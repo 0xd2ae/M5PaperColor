@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/qwd/Icons",
+  "commit": "d7d4ef4d8334f9e70a75a088cb77804bf81daea4",
+  "version": "1.8.0",
+  "copyright": "QWeather",
+  "icon_license": "CC BY 4.0",
+  "changes": "Rasterized official outline/fill glyphs; recolored to the six-color display palette."
+}
