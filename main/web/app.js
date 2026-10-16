@@ -200,8 +200,11 @@ function renderStatus(){
     stat('放假调休表',s.holiday_first?`${s.holiday_first}–${s.holiday_last} 年`:'无',d&&s.holiday_last<d.year?'今年的安排尚未导入':'',d&&s.holiday_last<d.year?'warn':'good'),
     stat('纪念日',`${s.anniversaries??0} 个`,s.card?'':'需要 TF 卡',s.card?'good':'off'),
     stat('退出后显示',page,s.celebrate_today?'今天是纪念日':'','good'));
+  const a=s.audio||{volume:60,keys:false,boot:false,chime:'off',chime_start:8,chime_end:21,anniv:'off'};
+  const audioActive=a.keys||a.boot||(a.chime&&a.chime!=='off')||(a.anniv&&a.anniv!=='off');
   const dot=(id,good)=>$(id).style.background=good===true?'var(--green)':good===false?'var(--red)':'#d9b60f';
   dot('wifiDot',s.ssid?(s.offline?null:true):false);dot('weatherDot',s.weather==='fresh'?true:s.weather==='stale'?null:false);
+  dot('audioDot',audioActive?true:null);
   dot('holidayDot',!(d&&s.holiday_last<d.year)||null);dot('tfDot',!!s.card);
   $('holidayInfo').textContent=s.holiday_first?`当前年度表覆盖 ${s.holiday_first}–${s.holiday_last} 年。`:'没有年度表。';
   $('tfStats').replaceChildren(stat('状态',s.card?'已插入':'未检测到',s.card?'':'插卡后重启设备',s.card?'good':'bad'),
@@ -217,6 +220,11 @@ async function refreshStatus(){
   if(device.has_password)$('passwordHint').textContent='Wi-Fi 名称不变时，留空沿用原密码；改了名称后留空表示开放网络。';
   if(device.has_key)$('keyHint').textContent='API Host 不变时，留空沿用已保存的凭据。';
   if(device.location){$('city').replaceChildren(new Option(device.city,device.location));$('city').value=device.location}
+  const a=device.audio||{};
+  $('audioVol').value=a.volume??60;$('audioVolOut').value=`${$('audioVol').value}%`;
+  $('audioKeys').checked=!!a.keys;$('audioBoot').checked=!!a.boot;
+  $('audioChime').value=a.chime||'off';$('audioChimeStart').value=a.chime_start??8;$('audioChimeEnd').value=a.chime_end??21;
+  $('audioAnniv').value=a.anniv||'off';$('chimeHoursRow').hidden=$('audioChime').value==='off';
 }
 function renderChips(){
   const chips=[['','日历'],...items.map(a=>[a.id,a.name])].map(([id,name])=>{const b=document.createElement('button');b.className='chip keep';b.dataset.id=id;b.textContent=name;
@@ -228,6 +236,70 @@ function ended(text){$('ended').hidden=false;showTab('screen');toast(text)}
 $('exit').onclick=()=>action(async()=>{const r=await ok(post('/api/exit',{}));ended(r.message);return r.message},$('exitResult'));
 
 /* ---------- Settings ---------- */
+const MELODIES=[
+  ['bell','清脆双音报时',[[84,72,140],[96,88,420]]],
+  ['westminster','威斯敏斯特大本钟',[[76,60,360],[72,67,360],[74,67,360],[67,59,720],[67,59,360],[74,67,360],[76,60,360],[72,64,800]]],
+  ['cuckoo','森林布谷鸟钟',[[91,72,180],[88,67,320],[0,0,120],[91,72,180],[88,72,420]]],
+  ['birthday','祝你生日快乐',[[67,0,210],[67,0,110],[69,65,320],[67,64,320],[72,64,320],[71,62,620],[67,0,210],[67,0,110],[69,65,320],[67,62,320],[74,65,320],[72,64,620],[67,0,210],[67,0,110],[79,71,320],[76,72,320],[72,64,320],[71,67,320],[69,65,520],[77,69,210],[77,69,110],[76,67,320],[72,64,320],[74,65,320],[72,64,720]]],
+  ['jasmine','茉莉花',[[76,60,300],[76,67,150],[79,72,150],[81,76,150],[84,76,150],[84,69,150],[81,76,150],[79,60,300],[79,64,150],[81,67,150],[79,72,580],[76,60,300],[76,67,150],[79,72,150],[81,76,150],[84,76,150],[84,69,150],[81,76,150],[79,60,300],[79,64,150],[81,67,150],[79,72,580]]],
+  ['newyear','新年好',[[72,64,180],[72,64,180],[72,67,360],[67,64,360],[76,67,180],[76,67,180],[76,72,360],[72,64,360],[72,64,180],[76,67,180],[79,72,360],[79,71,180],[77,69,180],[76,67,360],[74,65,520]]],
+  ['jingle','铃儿响叮当',[[76,60,210],[76,67,210],[76,72,420],[76,60,210],[76,67,210],[76,72,420],[76,60,210],[79,64,210],[72,67,310],[74,71,110],[76,72,760]]],
+  ['auld_lang_syne','友谊地久天长',[[72,67,300],[77,69,450],[77,72,150],[77,69,300],[81,72,300],[79,72,450],[77,69,150],[79,72,300],[81,65,150],[79,0,150],[77,69,450],[77,72,150],[81,77,300],[84,77,300],[86,77,750]]],
+  ['canon','帕赫贝尔 · D大调卡农',[[90,62,300],[81,69,300],[86,78,300],[85,69,300],[83,59,300],[78,66,300],[83,74,300],[81,66,300],[79,55,300],[74,62,300],[79,71,300],[78,62,300],[76,57,300],[81,64,300],[79,69,300],[78,73,300]]],
+  ['wedding','婚礼进行曲',[[72,67,300],[77,69,220],[77,69,100],[77,69,620],[72,67,300],[79,70,220],[76,67,100],[77,69,620],[72,69,300],[77,69,220],[81,72,100],[84,77,320],[81,72,320]]],
+  ['ode_to_joy','贝多芬 · 欢乐颂',[[76,60,260],[76,67,260],[77,69,260],[79,64,260],[79,62,260],[77,67,260],[76,72,260],[74,67,260],[72,60,260],[72,64,260],[74,67,260],[76,72,260],[76,67,390],[74,65,130],[74,59,520]]],
+  ['fur_elise','贝多芬 · 致爱丽丝',[[88,0,175],[87,0,175],[88,0,175],[87,0,175],[88,0,175],[83,0,175],[86,0,175],[84,0,175],[81,57,350],[72,64,175],[76,69,175],[81,72,175],[83,64,350]]],
+  ['clair_de_lune','勃拉姆斯 · 摇篮曲',[[76,60,220],[76,67,220],[79,64,580],[76,60,220],[76,67,220],[79,64,580],[76,60,220],[79,64,220],[84,76,420],[83,74,240],[81,72,360],[81,65,320],[79,64,360]]],
+  ['castle_sky','天空之城 · 伴着你',[[81,0,200],[83,0,200],[84,69,600],[83,64,200],[84,69,400],[88,72,400],[83,67,800],[76,0,200],[76,0,200],[81,65,600],[79,60,200],[81,65,400],[84,69,400],[79,64,800]]]
+];
+const MELODY_NAMES=Object.fromEntries([['off','静音（关闭）'],['','跟随全局默认'],...MELODIES.map(([k,n])=>[k,n])]);
+for(const sel of [$('audioChime'),$('audioAnniv'),$('aMelody')]){
+  if(sel.id==='aMelody')sel.append(new Option('跟随全局默认',''));
+  sel.append(new Option('静音（关闭）','off'));
+  for(const [id,name] of MELODIES)sel.append(new Option(name,id));
+}
+for(let h=0;h<24;h++){const label=`${pad(h)}:00`;$('audioChimeStart').append(new Option(label,h));$('audioChimeEnd').append(new Option(label,h))}
+$('audioChimeStart').value=8;$('audioChimeEnd').value=21;
+$('audioVol').oninput=()=>{$('audioVolOut').value=`${$('audioVol').value}%`};
+$('audioChime').onchange=()=>{$('chimeHoursRow').hidden=$('audioChime').value==='off'};
+let webAudioCtx=null;
+function stopWebAudio(){if(webAudioCtx){webAudioCtx.close().catch(()=>{});webAudioCtx=null}}
+function playWebPreview(id,volPct){
+  stopWebAudio();
+  const entry=MELODIES.find(m=>m[0]===id);if(!entry)return;
+  const Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return;
+  const ctx=new Ctx();webAudioCtx=ctx;let t=ctx.currentTime+.02;const scale=(volPct||60)/100*.25;
+  const pluck=(midi,when,ms,gain)=>{
+    if(!midi)return;const f=440*2**((midi-69)/12),dur=ms/1000*1.45+.14;
+    for(const [mult,amp,decay] of [[1,1,dur],[2,.28,dur*.4],[4,.1,.04]]){
+      if(f*mult>7200)continue;
+      const o=ctx.createOscillator(),g=ctx.createGain();o.type='sine';o.frequency.value=f*mult;
+      g.gain.setValueAtTime(.0001,when);g.gain.linearRampToValueAtTime(gain*amp,when+.004);
+      g.gain.exponentialRampToValueAtTime(.0001,when+decay);
+      o.connect(g);g.connect(ctx.destination);o.start(when);o.stop(when+decay+.02);
+    }
+  };
+  for(const [lead,bass,ms] of entry[2]){pluck(lead,t,ms,scale);pluck(bass,t,ms,scale*.5);t+=ms/1000}
+}
+async function testMelody(id,out){
+  if(!id||id==='off'){toast('当前选择为静音，请先选择一首曲目',false);return}
+  const vol=+$('audioVol').value||60;
+  try{
+    const r=await ok(post('/api/audio/test',{id,volume:vol}));
+    if(r.simulated)playWebPreview(id,vol);
+    note(out,r.message,'ok');
+  }catch(e){note(out,e.message||'试听失败','err')}
+}
+$('testChime').onclick=()=>testMelody($('audioChime').value,$('audioResult'));
+$('testAnniv').onclick=()=>testMelody($('audioAnniv').value,$('audioResult'));
+$('aTestMelody').onclick=()=>{const m=$('aMelody').value||$('audioAnniv').value||'off';testMelody(m,$('editorResult'))};
+$('stopAudio').onclick=async()=>{stopWebAudio();try{const r=await ok(post('/api/audio/test',{stop:true}));note($('audioResult'),r.message,'ok')}catch(e){}};
+$('saveAudio').onclick=()=>action(async wait=>{
+  wait('正在保存声音与报时设置…');
+  const payload={volume:+$('audioVol').value,keys:$('audioKeys').checked,boot:$('audioBoot').checked,
+    chime:$('audioChime').value,chime_start:+$('audioChimeStart').value,chime_end:+$('audioChimeEnd').value,anniv:$('audioAnniv').value};
+  const r=await ok(post('/api/audio',payload));await refreshStatus().catch(()=>{});return r.message;
+},$('audioResult'));
 $('connect').onclick=()=>action(async wait=>{wait('正在连接 Wi-Fi 并校时，最多约 30 秒…');const r=await ok(post('/api/connect',{ssid:$('ssid').value,password:$('password').value}));
   await refreshStatus().catch(()=>{});if(pv.mode==='calendar')previewCalendar();return r.message},$('wifiResult'));
 $('search').onclick=()=>action(async wait=>{wait('正在搜索城市…');const r=await post('/api/cities',{...api(),query:$('query').value.trim()});if(!r.location)throw Error(r.message||'没有找到城市');
@@ -270,9 +342,10 @@ async function loadList(){
   for(const a of items){
     const row=document.createElement('button');row.className='item keep';
     const kind=a.mode==='elapsed'?'经历日':'倒数日',rep=a.lunar?`农历${LUNAR_MONTHS[a.lunar.month-1]}月${LUNAR_DAYS[a.lunar.day-1]}`:a.repeat==='yearly'?'每年':'仅一次';
+    const song=a.melody&&a.melody!=='off'?` · ♪ ${MELODY_NAMES[a.melody]||a.melody}`:'';
     row.innerHTML='<canvas width="400" height="600"></canvas><div class="info"><b></b><div class="days"></div><div class="meta"></div></div><span class="go">›</span>';
     row.querySelector('canvas').dataset.id=a.id;row.querySelector('b').textContent=a.name;row.querySelector('.days').textContent=daysText(a);
-    row.querySelector('.meta').textContent=`${a.date} · ${kind} · ${rep}${a.image?' · 图片':''}`;
+    row.querySelector('.meta').textContent=`${a.date} · ${kind} · ${rep}${a.image?' · 图片':''}${song}`;
     row.onclick=()=>{if(!busy)openEditor(a)};
     list.append(row);
   }
@@ -315,8 +388,9 @@ async function renderStage(){
     if(imageDirty){clearTimeout(draftTimer);sendDraft()}}
   catch(e){note($('editorResult'),e.message,'err')}finally{if(g===stageGen)$('busy').textContent=''}
 }
-function currentItem(){return {id:editor.id,name:$('aName').value.trim(),date:$('aDate').value,mode:radio('mode'),repeat:radio('repeat'),
-  lunar:$('aLunar').checked?{month:+$('aLunarMonth').value,day:+$('aLunarDay').value}:null,image:hasImage,overlay:radio('overlay'),band:radio('band')}}
+function currentItem(){const item={id:editor.id,name:$('aName').value.trim(),date:$('aDate').value,mode:radio('mode'),repeat:radio('repeat'),
+  lunar:$('aLunar').checked?{month:+$('aLunarMonth').value,day:+$('aLunarDay').value}:null,image:hasImage,overlay:radio('overlay'),band:radio('band')};
+  if($('aMelody').value)item.melody=$('aMelody').value;return item}
 // Body: u16 little-endian JSON length, the item JSON, then the packed image only when it changed;
 // otherwise the device draws the image already stored on the card.
 function sendDraft(){
@@ -342,7 +416,7 @@ $$('input[name=stageView]').forEach(r=>r.onchange=renderStage);
 $('zoom').oninput=()=>{geo.zoom=+$('zoom').value;$('zoomOut').value=geo.zoom.toFixed(2);clampPan();quick()};
 $('ditherMode').onchange=imageChanged;
 $('preset').onchange=()=>{params={...PRESETS[$('preset').value]};syncSliders();$('autoNote').textContent='';imageChanged()};
-$('aName').oninput=changed;$('aDate').onchange=changed;$('aLunarMonth').onchange=changed;$('aLunarDay').onchange=changed;
+$('aName').oninput=changed;$('aDate').onchange=changed;$('aLunarMonth').onchange=changed;$('aLunarDay').onchange=changed;$('aMelody').onchange=changed;
 $$('input[name=mode],input[name=repeat],input[name=overlay],input[name=band]').forEach(r=>r.onchange=changed);
 $('aLunar').onchange=()=>{$('lunarRow').hidden=!$('aLunar').checked;if($('aLunar').checked)setRadio('repeat','yearly');changed()};
 function buildSliders(){
@@ -356,17 +430,20 @@ function syncSliders(){for(const [key,,,,step] of SLIDERS){$('s_'+key).value=par
 
 /* ---------- Auto: ISP-like AE / AWB / detail, then panel-simulated candidate search ---------- */
 const lin=c=>c<=.04045?c/12.92:((c+.055)/1.055)**2.4;
-function analyse(im){
-  const d=im.data,n=im.width*im.height,lum=new Float32Array(n);let skin=0,sky=0,leaf=0,sat=0,wr=0,wg=0,wb=0,wn=0;
+function analyse(im,sal){
+  const d=im.data,n=im.width*im.height,lum=new Float32Array(n);let skin=0,sky=0,leaf=0,sat=0,wr=0,wg=0,wb=0,wn=0,tw=0;
   for(let i=0;i<n;i++){
-    const r=d[i*4]/255,g=d[i*4+1]/255,b=d[i*4+2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),s=mx?(mx-mn)/mx:0;lum[i]=.2126*r+.7152*g+.0722*b;sat+=s;
+    const w=sal?1+2.5*sal[i]:1,r=d[i*4]/255,g=d[i*4+1]/255,b=d[i*4+2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),s=mx?(mx-mn)/mx:0;
+    lum[i]=.2126*r+.7152*g+.0722*b;sat+=s*w;tw+=w;
     let h=0;if(mx>mn){h=mx===r?((g-b)/(mx-mn))%6:mx===g?(b-r)/(mx-mn)+2:(r-g)/(mx-mn)+4;h*=60;if(h<0)h+=360}
     const isSkin=h>=8&&h<=50&&s>.15&&s<.6&&mx>.35,isSky=h>=190&&h<=250&&s>.15&&mx>.4,isLeaf=h>=70&&h<=160&&s>.2;
-    skin+=isSkin;sky+=isSky;leaf+=isLeaf;
+    skin+=isSkin*w;sky+=isSky*w;leaf+=isLeaf*w;
     if(!isSkin&&!isSky&&!isLeaf&&s<.25&&mx>.1&&mx<.97){wr+=r;wg+=g;wb+=b;wn++}
   }
   const sorted=lum.slice().sort();const q=p=>sorted[Math.min(n-1,Math.floor(p*n))];
-  return {p02:q(.02),p50:q(.5),p98:q(.98),skin:skin/n,sky:sky/n,leaf:leaf/n,sat:sat/n,gray:wn>n*.05?[wr/wn,wg/wn,wb/wn]:null,protect:(skin+sky+leaf)/n};
+  let p50=q(.5);
+  if(sal){let sw=0,sl=0;for(let i=0;i<n;i++)if(sal[i]>.25){const w=sal[i]*sal[i];sl+=lum[i]*w;sw+=w}if(sw>n*.01)p50=.65*(sl/sw)+.35*p50}
+  return {p02:q(.02),p50,p98:q(.98),skin:skin/tw,sky:sky/tw,leaf:leaf/tw,sat:sat/tw,gray:wn>n*.05?[wr/wn,wg/wn,wb/wn]:null,protect:(skin+sky+leaf)/tw};
 }
 function autoBase(st){
   const scene=st.skin>.12?'portrait':st.sky+st.leaf>.3?'landscape':st.sat<.08&&st.p98-st.p02>.6?'document':'balanced';
@@ -381,28 +458,42 @@ function autoBase(st){
   return {scene,p};
 }
 const SCENES={balanced:'均衡',landscape:'风景',portrait:'人像',document:'文档'};
-async function autoTune(source=geo.img){
-  const small=compose(150,225,source),st=analyse(compose(100,150,source)),{scene,p}=autoBase(st);let best=null;
+async function autoTune(source=geo.img,aiInfo=null){
+  const small=compose(150,225,source),st=analyse(compose(100,150,source),aiInfo?.sal100),{scene,p}=autoBase(st);let best=null;
+  if(aiInfo){
+    // When 3D-LUT+SCI has already graded tone & color, keep ISP exposure/gamma gentle so the learned 3D-LUT curve is preserved.
+    p.exposure=Math.max(-.45,Math.min(.45,p.exposure*.55));
+    p.gamma=1;
+    if(aiInfo.clarityBoost)p.clarity=Math.min(1,+(p.clarity+aiInfo.clarityBoost).toFixed(2));
+  }
   // Reference = ISP-style AE/AWB result; the search then picks what the panel reproduces best.
   const reference=await adjusted(small,p);
   for(const de of [-.33,0,.33])for(const ds of [-.15,0,.15]){
-    const c={...p,exposure:p.exposure+de,saturation:p.saturation+ds};
+    const c={...p,exposure:+(p.exposure+de).toFixed(2),saturation:+(p.saturation+ds).toFixed(2)};
     const s=await score(reference,await run(small,100,150,c,1),100,150);
     if(!best||s<best.s)best={s,c};
   }
   params=best.c;$('preset').value=scene;syncSliders();
-  $('autoNote').textContent=`自动：${SCENES[scene]}场景，曝光 ${params.exposure>=0?'+':''}${params.exposure.toFixed(2)} EV，饱和度 ${params.saturation.toFixed(2)}。可继续手动微调。`;
+  const expStr=`${params.exposure>=0?'+':''}${params.exposure.toFixed(2)} EV`;
+  $('autoNote').textContent=aiInfo
+    ?`AI 自动（${aiInfo.tag}）：${SCENES[scene]}场景，曝光 ${expStr}，饱和度 ${params.saturation.toFixed(2)}。可继续手动微调。`
+    :`自动：${SCENES[scene]}场景，曝光 ${expStr}，饱和度 ${params.saturation.toFixed(2)}。可继续手动微调。`;
   imageChanged();clearTimeout(stageTimer);await renderStage();
 }
-$('auto').onclick=()=>action(async wait=>{if(!geo.img)throw Error('请先选择图片');wait('正在自动调色…');await autoTune();return '自动调色完成'},$('editorResult'));
+$('auto').onclick=()=>action(async wait=>{
+  if(!geo.img)throw Error('请先选择图片');
+  if(original){geo.img=original;original=null}
+  wait('正在自动调色…');await autoTune();return '自动调色完成';
+},$('editorResult'));
 
 /* ---------- Optional ONNX (files under /papercolor/web/ort/ on the TF card) ---------- */
 let ai=null,aiManifest=null,original=null;
+const expLut=new Float32Array(256);for(let i=0;i<256;i++){const d=i/255;expLut[i]=Math.exp(-(d*d)/.018)}
 async function aiInit(){try{const r=await fetch('/sdweb/ort/manifest.json',{cache:'no-store'});if(!r.ok)return;aiManifest=await r.json();$('aiAuto').hidden=!(aiManifest.enhance||aiManifest.saliency)}catch(e){}}
 function script(src){return new Promise((good,fail)=>{const s=document.createElement('script');s.src=src;s.onload=good;s.onerror=()=>fail(Error('无法加载 '+src));document.head.append(s)})}
 async function aiSessions(wait){
   if(ai)return ai;
-  wait('首次加载 ONNX Runtime，约需十几秒…');
+  wait('首次加载 ONNX Runtime 与神经网络模型…');
   await script('/sdweb/ort/'+(aiManifest.runtime||'ort.wasm.min.js'));
   // Plain-HTTP setup page: no WebGPU and no SharedArrayBuffer, so single-threaded WASM only.
   ort.env.wasm.wasmPaths='/sdweb/ort/';ort.env.wasm.numThreads=1;
@@ -416,38 +507,127 @@ function tensor(img,size,mean=[0,0,0],std=[1,1,1]){
   for(let i=0;i<size*size;i++)for(let k=0;k<3;k++)t[k*size*size+i]=(d[i*4+k]/255-mean[k])/std[k];
   return {t,d};
 }
-// Fit per-channel tone curves from the model's low-res output and apply them to the full image.
-function curvesFrom(input,output,size){
-  const curves=[0,1,2].map(k=>{const sum=new Float64Array(256),cnt=new Float64Array(256);
-    for(let i=0;i<size*size;i++){const v=input[i*4+k];sum[v]+=Math.max(0,Math.min(1,output[k*size*size+i]));cnt[v]++}
-    const c=new Uint8ClampedArray(256);let last=0;
-    for(let v=0;v<256;v++){const y=cnt[v]?sum[v]/cnt[v]*255:-1;last=Math.max(last,y<0?last:y);c[v]=last}
-    return c});
-  return curves;
+// Joint bilateral upsampling of the model's 2D spatial enhancement map to full image resolution.
+function spatialEnhance(base,input,output,size,salUpright,salSide){
+  const n=size*size,lumIn=new Float32Array(n),lum255=new Uint8Array(n),sal=new Float32Array(n);
+  let sumLum=0,salLum=0,salW=0,bgLum=0,bgW=0;
+  const rRot=(4-geo.rot%4)%4;
+  for(let i=0;i<n;i++){
+    const r=input[i*4]/255,g=input[i*4+1]/255,b=input[i*4+2]/255,l=.2126*r+.7152*g+.0722*b;
+    lumIn[i]=l;lum255[i]=Math.round(l*255);sumLum+=l;
+    if(salUpright&&salSide>0){
+      const u=(i%size+.5)/size,v=(Math.floor(i/size)+.5)/size;
+      const [ru,rv]=rRot===1?[1-v,u]:rRot===2?[1-u,1-v]:rRot===3?[v,1-u]:[u,v];
+      const si=Math.min(salSide-1,Math.floor(rv*salSide))*salSide+Math.min(salSide-1,Math.floor(ru*salSide));
+      const sw=salUpright[si];sal[i]=sw;
+      if(sw>.3){salLum+=l*sw;salW+=sw}else{bgLum+=l*(1-sw);bgW+=1-sw}
+    }
+  }
+  const backlit=salW>n*.01&&bgW>n*.05?Math.max(0,bgLum/bgW-salLum/salW):0;
+  // Preserve full 3D-LUT + SCI color & tone grading across shadows, midtones, and highlights, with extra weight on salient subjects.
+  const baseStrength=Math.min(.92,.76+backlit*.35);
+  const eps=.04,rawG=[new Float32Array(n),new Float32Array(n),new Float32Array(n)];
+  let shadowSum=0,shadowCnt=0;
+  for(let i=0;i<n;i++){
+    const l=lumIn[i],a=Math.min(.96,baseStrength*(1+.18*sal[i]+.12*(1-l)*(1-l)));
+    let lOut=0;
+    for(let k=0;k<3;k++){
+      const x=input[i*4+k]/255,y=Math.max(0,Math.min(1,output[k*n+i])),t=x+a*(y-x);
+      rawG[k][i]=(t+eps)/(x+eps);
+      lOut+=(k===0?.2126:k===1?.7152:.0722)*t;
+    }
+    if(l>.03&&l<.40){shadowSum+=(lOut-l)/Math.max(.08,l);shadowCnt++}
+  }
+  // 3x3 box smooth on the 256x256 gain grid to suppress any CNN checkerboard noise before bilateral upsampling.
+  const G=[new Float32Array(n),new Float32Array(n),new Float32Array(n)];
+  for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+    const x0=Math.max(0,x-1),x1=Math.min(size-1,x+1),y0=Math.max(0,y-1),y1=Math.min(size-1,y+1);
+    let r=0,g=0,b=0,cnt=0;
+    for(let yy=y0;yy<=y1;yy++)for(let xx=x0;xx<=x1;xx++){const j=yy*size+xx;r+=rawG[0][j];g+=rawG[1][j];b+=rawG[2][j];cnt++}
+    const i=y*size+x;G[0][i]=r/cnt;G[1][i]=g/cnt;G[2][i]=b/cnt;
+  }
+  const W=base.width,H=base.height,c=document.createElement('canvas');c.width=W;c.height=H;
+  const ctx=c.getContext('2d');ctx.drawImage(base,0,0);
+  const im=ctx.getImageData(0,0,W,H),d=im.data,scaleX=(size-1)/Math.max(1,W-1),scaleY=(size-1)/Math.max(1,H-1),eps255=eps*255;
+  for(let y=0;y<H;y++){
+    const gy=y*scaleY,y0=Math.min(size-2,gy|0),fy=gy-y0,wy0=1-fy,wy1=fy,row0=y0*size,row1=(y0+1)*size;
+    for(let x=0;x<W;x++){
+      const gx=x*scaleX,x0=Math.min(size-2,gx|0),fx=gx-x0;
+      const i00=row0+x0,i10=i00+1,i01=row1+x0,i11=i01+1,p=(y*W+x)*4;
+      const r=d[p],g=d[p+1],b=d[p+2],l=(54*r+183*g+19*b)>>8;
+      const w00=(1-fx)*wy0*expLut[Math.abs(l-lum255[i00])],w10=fx*wy0*expLut[Math.abs(l-lum255[i10])];
+      const w01=(1-fx)*wy1*expLut[Math.abs(l-lum255[i01])],w11=fx*wy1*expLut[Math.abs(l-lum255[i11])];
+      const ws=w00+w10+w01+w11||1;
+      const gr=(w00*G[0][i00]+w10*G[0][i10]+w01*G[0][i01]+w11*G[0][i11])/ws;
+      const gg=(w00*G[1][i00]+w10*G[1][i10]+w01*G[1][i01]+w11*G[1][i11])/ws;
+      const gb=(w00*G[2][i00]+w10*G[2][i10]+w01*G[2][i01]+w11*G[2][i11])/ws;
+      d[p]=(r+eps255)*gr-eps255;d[p+1]=(g+eps255)*gg-eps255;d[p+2]=(b+eps255)*gb-eps255;
+    }
+  }
+  ctx.putImageData(im,0,0);
+  const liftPct=shadowCnt>0?Math.round(shadowSum/shadowCnt*100):0;
+  return {canvas:c,liftPct,clarityBoost:liftPct>15?.12:.06};
+}
+// Map the upright saliency map into the 100x150 composed frame for subject-weighted ISP metering.
+function composeSaliency(salMap,side,W,H){
+  if(!salMap||!side)return null;
+  const c=document.createElement('canvas');c.width=c.height=side;
+  const ctx=c.getContext('2d'),im=ctx.createImageData(side,side);
+  for(let i=0;i<salMap.length;i++){const v=Math.round(salMap[i]*255);im.data[i*4]=im.data[i*4+1]=im.data[i*4+2]=v;im.data[i*4+3]=255}
+  ctx.putImageData(im,0,0);
+  const out=document.createElement('canvas');out.width=W;out.height=H;
+  const octx=out.getContext('2d'),[rw,rh]=rotated(),s=scaleFor(W,H);
+  octx.save();octx.translate(W/2+geo.px*W,H/2+geo.py*H);octx.scale(s*rw/side,s*rh/side);octx.drawImage(c,-side/2,-side/2);octx.restore();
+  const od=octx.getImageData(0,0,W,H).data,res=new Float32Array(W*H);
+  for(let i=0;i<W*H;i++)res[i]=od[i*4]/255;
+  return res;
 }
 // The image as currently rotated, so the saliency centroid maps straight onto the pan offsets.
 function upright(img){const r=geo.rot%2,c=document.createElement('canvas');c.width=r?img.height:img.width;c.height=r?img.width:img.height;
   const ctx=c.getContext('2d');ctx.translate(c.width/2,c.height/2);ctx.rotate(geo.rot*Math.PI/2);ctx.drawImage(img,-img.width/2,-img.height/2);return c}
 $('aiAuto').onclick=()=>action(async wait=>{
   if(!geo.img)throw Error('请先选择图片');const s=await aiSessions(wait),base=original||geo.img;
-  if(s.saliency&&geo.fit==='cover'){
+  const tags=[];let salNorm=null,salSide=0;
+  if(s.saliency){
+    wait('正在运行显著性主体检测…');
     const m=aiManifest.saliency,size=m.size||320,view=upright(base),{t}=tensor(view,size,m.mean,m.std);
     const out=(await s.saliency.run({[s.saliency.inputNames[0]]:new ort.Tensor('float32',t,[1,3,size,size])}))[s.saliency.outputNames[0]].data;
     let lo=Infinity,hi=-Infinity;for(const v of out){lo=Math.min(lo,v);hi=Math.max(hi,v)}
-    let sx=0,sy=0,sw=0;const side=Math.round(Math.sqrt(out.length));
-    for(let i=0;i<out.length;i++){const w=((out[i]-lo)/(hi-lo||1))**2;sx+=w*(i%side+.5);sy+=w*(Math.floor(i/side)+.5);sw+=w}
-    if(sw>0){const k=scaleFor(1,1.5);geo.px=(.5-sx/sw/side)*view.width*k;geo.py=(.5-sy/sw/side)*view.height*k/1.5;clampPan()}
+    salSide=Math.round(Math.sqrt(out.length));salNorm=new Float32Array(out.length);
+    let sx=0,sy=0,sw=0,area=0;
+    for(let i=0;i<out.length;i++){
+      const v=(out[i]-lo)/(hi-lo||1);salNorm[i]=v;
+      if(v>.35)area++;
+      if(v>.22){const w=(v-.22)**2;sx+=w*(i%salSide+.5);sy+=w*(Math.floor(i/salSide)+.5);sw+=w}
+    }
+    if(sw>0&&geo.fit==='cover'){
+      const cx=sx/sw/salSide,cy=sy/sw/salSide;
+      let vx=0,vy=0;
+      for(let i=0;i<out.length;i++)if(salNorm[i]>.22){const w=(salNorm[i]-.22)**2,dx=(i%salSide+.5)/salSide-cx,dy=(Math.floor(i/salSide)+.5)/salSide-cy;vx+=w*dx*dx;vy+=w*dy*dy}
+      const span=Math.max(Math.sqrt(vx/sw),Math.sqrt(vy/sw))*3.2,frac=area/out.length;
+      geo.zoom=frac>.015&&frac<.22&&span<.48?+Math.min(1.32,Math.max(1,.5/Math.max(.25,span))).toFixed(2):1;
+      $('zoom').value=geo.zoom;$('zoomOut').value=geo.zoom.toFixed(2);
+      // Keep the salient subject clear of the top or bottom anniversary text banner.
+      const targetX=.5,targetY=radio('overlay')==='top'?.56:.42,k=scaleFor(1,1.5);
+      geo.px=(targetX-.5)-((cx-.5)*view.width*k);
+      geo.py=(targetY-.5)-((cy-.5)*view.height*k/1.5);
+      clampPan();
+    }
+    tags.push(`${m.name||'显著性'} 主体取景`);
   }
-  let source=base;
+  let source=base,clarityBoost=0;
   if(s.enhance){
+    wait('正在运行局部光影增强网络…');
     const m=aiManifest.enhance,size=m.size||256,{t,d}=tensor(base,size);
     const out=(await s.enhance.run({[s.enhance.inputNames[0]]:new ort.Tensor('float32',t,[1,3,size,size])}))[s.enhance.outputNames[0]].data;
-    const curves=curvesFrom(d,out,size),c=document.createElement('canvas');c.width=base.width;c.height=base.height;const ctx=c.getContext('2d');ctx.drawImage(base,0,0);
-    const im=ctx.getImageData(0,0,c.width,c.height);for(let i=0;i<im.data.length;i+=4)for(let k=0;k<3;k++)im.data[i+k]=curves[k][im.data[i+k]];ctx.putImageData(im,0,0);
-    source=c;original=base;geo.img=c;
+    const enh=spatialEnhance(base,d,out,size,salNorm,salSide);
+    source=enh.canvas;original=base;geo.img=enh.canvas;clarityBoost=enh.clarityBoost;
+    tags.push(`${m.name||'增强'} 暗部${enh.liftPct>=0?'+':''}${enh.liftPct}%`);
   }
   wait('AI 预处理完成，正在按墨水屏模拟打分…');
-  await autoTune(source);return 'AI 自动完成：模型只做预增强和取景，最终参数由墨水屏模拟打分选出';
+  const sal100=composeSaliency(salNorm,salSide,100,150);
+  await autoTune(source,{tag:tags.join(' + ')||'ONNX',sal100,clarityBoost});
+  return `AI 自动完成（${tags.join('，')}）`;
 },$('editorResult'));
 
 /* ---------- Editor: open, save, close ---------- */
@@ -460,6 +640,7 @@ async function openEditor(a){
   $('editorTitle').textContent=a?'编辑纪念日':'添加纪念日';$('aName').value=a?.name||'';$('aDate').value=a?.date||todayString();
   setRadio('mode',a?.mode||'countdown');setRadio('repeat',a?.repeat||'yearly');$('aLunar').checked=!!a?.lunar;$('lunarRow').hidden=!a?.lunar;
   if(a?.lunar){$('aLunarMonth').value=a.lunar.month;$('aLunarDay').value=a.lunar.day}
+  $('aMelody').value=a?.melody||'';
   setRadio('overlay',a?.overlay||'bottom');setRadio('band',a?.band||'white');
   $('aDelete').hidden=!a;$('editorResult').textContent='';
   $('editor').hidden=false;$('editor').scrollTop=0;document.body.classList.add('editing');

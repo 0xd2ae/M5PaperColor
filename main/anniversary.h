@@ -12,6 +12,7 @@ typedef struct {
     bool yearly, lunar, image, overlay_top;
     int lunar_month, lunar_day;
     pc_color_t band;
+    char melody[20]; /* "" (use global default), "off" or melody id */
 } pc_anniversary_t;
 typedef struct { int count; pc_anniversary_t items[PC_ANNIV_MAX]; } pc_anniversaries_t;
 

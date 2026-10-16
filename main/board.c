@@ -18,7 +18,7 @@
 
 static const char *TAG="board";
 static i2c_master_bus_handle_t bus;
-static i2c_master_dev_handle_t pm,rtc,sht;
+static i2c_master_dev_handle_t pm,rtc,sht,codec;
 static spi_device_handle_t panel;
 static bool panel_ready;
 static esp_err_t read_reg(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t *data,size_t count)
@@ -63,6 +63,8 @@ esp_err_t pc_board_init(void)
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus,&dev,&rtc),TAG,"rtc");
     dev.device_address=0x44;
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus,&dev,&sht),TAG,"sht40");
+    dev.device_address=0x18;
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus,&dev,&codec),TAG,"es8311");
     ESP_RETURN_ON_ERROR(write_reg(pm,0x09,0),TAG,"pm sleep");
     ESP_RETURN_ON_ERROR(write_reg(pm,0x0a,0),TAG,"pm watchdog");
     /* Main DC/DC remains on; charging on; RGB LDO and Grove boost off. */
@@ -274,4 +276,15 @@ int pc_battery_percent(void)
     if (read_reg(pm,0x22,v,2)!=ESP_OK) return -1;
     int mv=v[0]|(v[1]<<8),percent=(mv-3300)*100/900;
     return percent<0 ? 0 : percent>100 ? 100 : percent;
+}
+esp_err_t pc_board_codec_write(uint8_t reg,uint8_t value)
+{
+    return codec ? write_reg(codec,reg,value) : ESP_ERR_INVALID_STATE;
+}
+void pc_board_audio_power(bool codec_on,bool spk_on)
+{
+    /* G45 powers the codec; G46 is the AW8737A enable. Drop the amp first so codec power-down does not pop. */
+    if (!spk_on) gpio_set_level(46,0);
+    gpio_set_level(45,codec_on);
+    if (spk_on) gpio_set_level(46,1);
 }

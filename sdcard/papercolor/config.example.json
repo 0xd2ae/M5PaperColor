@@ -13,5 +13,14 @@
     "location": "",
     "latitude": null,
     "longitude": null
+  },
+  "audio": {
+    "volume": 60,
+    "keys": false,
+    "boot": false,
+    "chime": "off",
+    "chime_start": 8,
+    "chime_end": 21,
+    "anniv": "off"
   }
 }

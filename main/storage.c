@@ -4,6 +4,7 @@
 #include "nvs.h"
 #include "esp_log.h"
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,8 +65,12 @@ esp_err_t pc_file_write(const char *path,const void *data,size_t length)
 void pc_config_load(pc_config_t *config)
 {
     memset(config,0,sizeof(*config));
+    pc_audio_defaults(&config->audio);
     char *json=pc_storage_card()?pc_file_read(CONFIG_PATH,8192,NULL):NULL;
-    if (json && !pc_config_from_json(json,config)) ESP_LOGW(TAG,"config.json is not valid JSON");
+    if (json && !pc_config_from_json(json,config)) {
+        ESP_LOGW(TAG,"config.json is not valid JSON");
+        pc_audio_defaults(&config->audio);
+    }
     free(json);
 }
 esp_err_t pc_config_save(const pc_config_t *config)
@@ -108,9 +113,12 @@ void pc_storage_migrate(void)
 {
     if (!pc_storage_card()) return;
     struct stat st;
-    pc_config_t old; size_t length=sizeof(old);
-    if (stat(CONFIG_PATH,&st) && nvs_get_blob(store,"config_v1",&old,&length)==ESP_OK && length==sizeof(old)) {
+    pc_config_t old; memset(&old,0,sizeof(old)); size_t length=sizeof(old);
+    /* Blobs written before the audio fields are shorter; anything through `coordinates` is enough. */
+    if (stat(CONFIG_PATH,&st) && nvs_get_blob(store,"config_v1",&old,&length)==ESP_OK &&
+        length>=offsetof(pc_config_t,audio) && length<=sizeof(old)) {
         old.ssid[32]=0; old.password[64]=0; old.host[127]=0; old.api_key[128]=0; old.city[96]=0; old.location[32]=0;
+        pc_audio_defaults(&old.audio);
         pc_config_t check;
         if (pc_config_save(&old)==ESP_OK) {
             pc_config_load(&check);

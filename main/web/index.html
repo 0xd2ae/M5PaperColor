@@ -178,6 +178,20 @@ details{margin-top:12px}summary{cursor:pointer;color:var(--blue);font-weight:600
           <p class="result" id="weatherResult"></p>
           <p class="hint">保存前会先验证天气接口，失败时保留原配置。保存成功后设备退出配置并刷新屏幕。<a href="https://dev.qweather.com/" target="_blank" rel="noreferrer">和风天气开发者服务</a></p></div>
 
+        <div class="card"><header><span class="dot" id="audioDot"></span><h2>声音与报时</h2></header>
+          <p class="hint">整点报时、开机发声、按键提示音和纪念日音乐默认全部静音，按需开启。</p>
+          <div class="slider" style="margin-top:12px"><span>扬声器音量</span><input id="audioVol" type="range" min="10" max="100" step="5" value="60"><output id="audioVolOut">60%</output></div>
+          <label class="check"><input type="checkbox" id="audioKeys">按键清脆提示音（短按翻页／长按切换）</label>
+          <label class="check"><input type="checkbox" id="audioBoot">上电开机提示音（整点后台唤醒与休眠不发声）</label>
+          <label class="field"><span>整点报时</span><div class="row"><select id="audioChime"></select><button id="testChime" class="keep" style="flex:none">试听</button></div></label>
+          <div class="row" id="chimeHoursRow" style="margin-top:10px">
+            <label class="field" style="margin:0"><span>报时起始整点</span><select id="audioChimeStart"></select></label>
+            <label class="field" style="margin:0"><span>报时结束整点</span><select id="audioChimeEnd"></select></label>
+          </div>
+          <label class="field"><span>纪念日默认音乐</span><div class="row"><select id="audioAnniv"></select><button id="testAnniv" class="keep" style="flex:none">试听</button></div></label>
+          <div class="row" style="margin-top:12px"><button class="primary" id="saveAudio">保存声音设置</button><button id="stopAudio" class="keep" style="flex:none">停止试听</button></div>
+          <p class="result" id="audioResult"></p></div>
+
         <div class="card"><header><span class="dot" id="holidayDot"></span><h2>放假调休表</h2></header>
           <p class="hint" id="holidayInfo"></p>
           <label class="picker"><input id="holidays" type="file" accept="application/json,.json"><span id="holidayFile">选择年度表 JSON 文件</span></label>
@@ -215,6 +229,7 @@ details{margin-top:12px}summary{cursor:pointer;color:var(--blue);font-weight:600
         <div class="seg wide" role="radiogroup" aria-label="重复"><label><input type="radio" name="repeat" value="yearly" checked><span>每年</span></label><label><input type="radio" name="repeat" value="once"><span>仅一次</span></label></div>
         <label class="check"><input type="checkbox" id="aLunar">按农历日期每年重复（如农历生日）</label>
         <div class="row" id="lunarRow" hidden style="margin-top:10px"><select id="aLunarMonth" aria-label="农历月"></select><select id="aLunarDay" aria-label="农历日"></select></div>
+        <label class="field"><span>专属音乐</span><div class="row"><select id="aMelody"></select><button id="aTestMelody" class="keep" type="button" style="flex:none">试听</button></div></label>
       </div>
 
       <div class="card"><header><span class="step">2</span><h2>图片 <small style="font-weight:400;color:var(--muted);font-size:13px">可选</small></h2></header>

@@ -33,7 +33,7 @@ for name in resources:
 cmd=['cc','-std=gnu11','-DPC_HOST_CHECKS','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
      '-I'+str(ROOT/'main'),'-I'+str(ROOT/'components/cjson'),
      str(ROOT/'tests/host_checks.c'),str(ROOT/'main/calendar.c'),str(ROOT/'main/data.c'),
-     str(ROOT/'main/buttons.c'),str(ROOT/'main/render.c'),str(ROOT/'main/compression.c'),
+     str(ROOT/'main/buttons.c'),str(ROOT/'main/audio.c'),str(ROOT/'main/render.c'),str(ROOT/'main/compression.c'),
      str(ROOT/'main/anniversary.c'),str(ROOT/'main/fonts.c'),str(BUILD/'cJSON.o'),
      str(BUILD/'assets.S'),'-lm','-lz','-o',str(BUILD/'checks')]
 subprocess.run(['cc','-g','-fsanitize=address,undefined','-Wno-deprecated-declarations','-I'+str(ROOT/'components/cjson'),'-c',str(ROOT/'components/cjson/cJSON.c'),'-o',str(BUILD/'cJSON.o')],check=True)

@@ -89,16 +89,15 @@ tools/build_wasm.sh
 配置页是 `http://192.168.4.1`，不是安全上下文，浏览器不提供 WebGPU 和 SharedArrayBuffer，因此只能用 ONNX Runtime Web 的单线程 WASM 后端。运行时（约 14 MB）和模型放在卡上，首次加载较慢，之后由浏览器缓存：
 
 ```sh
-.venv/bin/python tools/prepare_sdcard.py /Volumes/卡名 --ort \
-    --saliency-model u2netp.onnx --saliency-size 320 \
-    --saliency-mean 0.485 0.456 0.406 --saliency-std 0.229 0.224 0.225 \
-    --enhance-model my-enhancer.onnx --enhance-size 256
+.venv/bin/python tools/prepare_sdcard.py /Volumes/卡名 --ort
 ```
 
-- **显著性模型**（输入 1×3×N×N，输出 1×1×N×N，如 U²-Netp）：用显著区域重心决定裁剪位置。
-- **增强模型**（输入输出均为 1×3×N×N、0–1 RGB 的图像到图像网络）：在低分辨率运行，拟合每通道色调曲线后作用于原图。
+默认下载并校验两个预训练模型（也可通过 `--saliency-model` / `--enhance-model` 替换为自定义模型）：
 
-模型只做预增强和取景，最终参数仍由上面的墨水屏模拟打分选出。项目不附带模型文件；请自行确认模型授权。`tests/onnx_fixture.py` 可生成测试用的极小模型。
+- **前景主体分割模型 RMBG-1.4 INT8**（`saliency.onnx`，约 42.3 MB，解锁动态分辨率后默认按 1×3×512×512 运行）：高精度识别人像、宠物与各类物体主体位置与范围，自动避开顶部或底部纪念日文字条进行取景与适度缩放，并为主体区域提供测光权重。
+- **专业调色与局部光影融合模型 3D-LUT + SCI**（`enhance.onnx`，约 2.3 MB，输入输出 1×3×256×256）：融合 CVPR 2022 **SCI**（自校准局部光影恢复）与 IEEE TPAMI 2022 **Image-Adaptive 3D-LUT**（基于 MIT-Adobe FiveK Expert C 专业修图训练的自适应 33×33×33 三维色彩查找表与三线性插值），再以联合双边上采样（Joint Bilateral Upsampling）作用到全分辨率原图，在保留 100% 边缘锐度的同时完成逆光暗部恢复、高光柔和滚降与色彩分级。
+
+模型完成主体取景与局部暗部恢复后，最终曝光与饱和度仍由上面的墨水屏光学模拟打分选出。模型文件随脚本下载到 TF 卡，不随固件分发。`tests/onnx_fixture.py` 可生成极小算子图供自动化测试使用。
 
 ## 按键与更新
 
@@ -129,6 +128,19 @@ tools/build_wasm.sh
 | 进入休眠（关机） | 白色渐暗熄灭 |
 | 电量 ≤20% | 第二颗灯每 2 秒红色短闪 |
 | 电量 ≤5% | 两颗灯红色快闪，覆盖其他状态 |
+
+## 扬声器
+
+板载 ES8311 解码器与 AW8737A 功放平时断电，只有要出声时才给 G45／G46 上电。声音由固件里的八音盒合成器生成，不依赖音频文件。整点报时、开机提示、按键提示和纪念日音乐**默认全部关闭**；在配置页“声音与报时”里打开，并可用试听按钮从扬声器播放。
+
+| 设置 | 默认 | 行为 |
+| --- | --- | --- |
+| 按键提示音 | 关 | 短按 A／B／C 与长按 B／C 满三秒时立刻给一声短音，不必等屏幕刷完 |
+| 开机提示音 | 关 | 仅上电开机时播放；整点唤醒和进入休眠不发声 |
+| 整点报时 | 关 | 打开后在设定整点范围内报时（默认 08:00–21:00，可跨午夜）。电量 ≤10% 时跳过 |
+| 纪念日音乐 | 关 | 打开后，纪念日当天白天的第一次自动唤醒，以及手动切到该纪念日时播放。每个纪念日可另选曲子或单独静音 |
+
+内置曲子：清脆双音报时、威斯敏斯特大本钟、森林布谷鸟钟、祝你生日快乐、茉莉花、新年好、铃儿响叮当、友谊地久天长、D 大调卡农、婚礼进行曲、欢乐颂、致爱丽丝、摇篮曲、天空之城。没有选择曲子时保持安静。
 
 ## 农历和节假日
 
@@ -180,7 +192,7 @@ TF 卡扩展字库为 18／24／36 px Regular，覆盖源字体内全部 CJK 统
 
 ## 测试与结构
 
-`main/board.c`：原生屏幕／电源／RTC／SHT40；`led.c`：RGB 状态灯；`buttons.c`：消抖与请求合并；`calendar.c`：公历、农历和年度表；`data.c`／`network.c`：天气解析及联网；`compression.c`：有界 Gzip 解压和校验；`sdcard.c`：TF 卡供电与挂载；`storage.c`：卡上文件（原子写入）与 NVS 天气缓存；`anniversary.c`：纪念日模型；`fonts.c`：卡上字库；`setup.c`／`web/`：配置服务与图片编辑器；`render.c`：六色绘制；`M5PaperColor.c`：生命周期与睡眠。`imaging/`：浏览器图像管线（编译为 `main/web/e6.wasm`）。
+`main/board.c`：原生屏幕／电源／RTC／SHT40；`led.c`：RGB 状态灯；`audio.c`：八音盒合成与 ES8311／扬声器；`buttons.c`：消抖与请求合并；`calendar.c`：公历、农历和年度表；`data.c`／`network.c`：天气解析及联网；`compression.c`：有界 Gzip 解压和校验；`sdcard.c`：TF 卡供电与挂载；`storage.c`：卡上文件（原子写入）与 NVS 天气缓存；`anniversary.c`：纪念日模型；`fonts.c`：卡上字库；`setup.c`／`web/`：配置服务与图片编辑器；`render.c`：六色绘制；`M5PaperColor.c`：生命周期与睡眠。`imaging/`：浏览器图像管线（编译为 `main/web/e6.wasm`）。
 
 主机测试直接编译实际可移植 C 模块，使用 AddressSanitizer／UndefinedBehaviorSanitizer，检查日期转换、闰月、除夕、跨年假期、补班、坏年度表、天气解析、按键合并、损坏 Gzip、纪念日（倒数／经历、农历、2 月 29 日、整百天）、卡上配置 JSON、城市解析、卡上字库与缺字、图像管线（纯色、确定性、白边干净、打分）和 WASM 冒烟测试，并输出 `docs/previews/` 图片（含 `anniv-*.png`）。当前脚本面向 macOS（Mach-O 资源嵌入）；Gzip 主机测试用 zlib，设备使用 ESP32-S3 ROM miniz。
 

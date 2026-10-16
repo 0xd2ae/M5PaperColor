@@ -1,4 +1,5 @@
 #include "services.h"
+#include "audio.h"
 #include "render.h"
 #include "sdcard.h"
 #include "cJSON.h"
@@ -131,6 +132,16 @@ static esp_err_t status_get(httpd_req_t *req)
     for (int i=0;i<3;i++) if (st.fonts[i]) cJSON_AddItemToArray(fonts,cJSON_CreateNumber(SIZES[i]));
     struct stat file;
     cJSON_AddBoolToObject(root,"onnx",pc_storage_card() && !stat(PC_SD_DIR "/web/ort/manifest.json",&file));
+    cJSON *aud=cJSON_AddObjectToObject(root,"audio");
+    if (aud) {
+        cJSON_AddNumberToObject(aud,"volume",active->audio.volume);
+        cJSON_AddBoolToObject(aud,"keys",active->audio.keys);
+        cJSON_AddBoolToObject(aud,"boot",active->audio.boot);
+        cJSON_AddStringToObject(aud,"chime",active->audio.chime[0]?active->audio.chime:"off");
+        cJSON_AddNumberToObject(aud,"chime_start",active->audio.chime_start);
+        cJSON_AddNumberToObject(aud,"chime_end",active->audio.chime_end);
+        cJSON_AddStringToObject(aud,"anniv",active->audio.anniv[0]?active->audio.anniv:"off");
+    }
     return send_json(req,root);
 }
 static esp_err_t connect_post(httpd_req_t *req)
@@ -233,6 +244,53 @@ static esp_err_t exit_post(httpd_req_t *req)
 {
     touch();
     esp_err_t err=reply(req,true,"正在退出配置"); atomic_store(&finished,esp_timer_get_time()); return err;
+}
+static esp_err_t audio_post(httpd_req_t *req)
+{
+    touch();
+    if (!pc_storage_card()) return reply(req,false,NO_CARD);
+    cJSON *root=request_json(req);
+    pc_audio_config_t a=active->audio;
+    const cJSON *vol=cJSON_GetObjectItemCaseSensitive(root,"volume");
+    const cJSON *cs=cJSON_GetObjectItemCaseSensitive(root,"chime_start");
+    const cJSON *ce=cJSON_GetObjectItemCaseSensitive(root,"chime_end");
+    const cJSON *keys=cJSON_GetObjectItemCaseSensitive(root,"keys");
+    const cJSON *boot=cJSON_GetObjectItemCaseSensitive(root,"boot");
+    bool ok=cJSON_IsNumber(vol) && vol->valueint>=10 && vol->valueint<=100 &&
+        cJSON_IsNumber(cs) && cs->valueint>=0 && cs->valueint<=23 &&
+        cJSON_IsNumber(ce) && ce->valueint>=0 && ce->valueint<=23 &&
+        cJSON_IsBool(keys) && cJSON_IsBool(boot) &&
+        field(root,"chime",a.chime,sizeof(a.chime)) && pc_melody_valid(a.chime) &&
+        field(root,"anniv",a.anniv,sizeof(a.anniv)) && pc_melody_valid(a.anniv);
+    if (ok) {
+        a.volume=vol->valueint; a.chime_start=cs->valueint; a.chime_end=ce->valueint;
+        a.keys=cJSON_IsTrue(keys); a.boot=cJSON_IsTrue(boot);
+    }
+    cJSON_Delete(root);
+    if (!ok) return reply(req,false,"声音设置参数无效");
+    pc_config_t candidate=*active; candidate.audio=a;
+    if (pc_config_save(&candidate)!=ESP_OK) return reply(req,false,"保存失败，原设置未修改");
+    active->audio=a; draft.audio=a;
+    return reply(req,true,"声音与报时设置已保存");
+}
+static esp_err_t audio_test_post(httpd_req_t *req)
+{
+    touch();
+    cJSON *root=request_json(req);
+    char id[24]="";
+    int vol=active->audio.volume;
+    const cJSON *v=cJSON_GetObjectItemCaseSensitive(root,"volume");
+    if (cJSON_IsNumber(v) && v->valueint>=10 && v->valueint<=100) vol=v->valueint;
+    bool stop=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stop"));
+    bool ok=stop || (field(root,"id",id,sizeof(id)) && pc_melody_lookup(id)!=NULL);
+    cJSON_Delete(root);
+    if (!ok) return reply(req,false,"曲目无效");
+    if (stop) { pc_audio_stop(); return reply(req,true,"已停止试听"); }
+    pc_audio_play(id,vol);
+    const pc_melody_info_t *m=pc_melody_lookup(id);
+    char msg[96];
+    snprintf(msg,sizeof(msg),"正在通过扬声器试听：%s",m?m->name:id);
+    return reply(req,true,msg);
 }
 static esp_err_t send_json(httpd_req_t *req,cJSON *root)
 {
@@ -479,7 +537,7 @@ esp_err_t pc_setup_start(pc_config_t *config)
     if (!ap_netif) ap_netif=esp_netif_create_default_wifi_ap();
     if (!ap_netif) return ESP_ERR_NO_MEM;
     esp_err_t err=pc_network_ap_start(); if (err!=ESP_OK) return err;
-    httpd_config_t cfg=HTTPD_DEFAULT_CONFIG(); cfg.stack_size=12288; cfg.recv_wait_timeout=10; cfg.send_wait_timeout=10; cfg.max_uri_handlers=20;
+    httpd_config_t cfg=HTTPD_DEFAULT_CONFIG(); cfg.stack_size=12288; cfg.recv_wait_timeout=10; cfg.send_wait_timeout=10; cfg.max_uri_handlers=24;
     cfg.uri_match_fn=httpd_uri_match_wildcard; cfg.lru_purge_enable=true;
     err=httpd_start(&server,&cfg); if (err!=ESP_OK) return err;
     const httpd_uri_t routes[]={
@@ -487,6 +545,7 @@ esp_err_t pc_setup_start(pc_config_t *config)
         {.uri="/e6.wasm",.method=HTTP_GET,.handler=wasm_get}, {.uri="/api/status",.method=HTTP_GET,.handler=status_get},
         {.uri="/api/connect",.method=HTTP_POST,.handler=connect_post}, {.uri="/api/cities",.method=HTTP_POST,.handler=city_post},
         {.uri="/api/save",.method=HTTP_POST,.handler=save_post}, {.uri="/api/holidays",.method=HTTP_POST,.handler=holidays_post},
+        {.uri="/api/audio",.method=HTTP_POST,.handler=audio_post}, {.uri="/api/audio/test",.method=HTTP_POST,.handler=audio_test_post},
         {.uri="/api/exit",.method=HTTP_POST,.handler=exit_post},
         {.uri="/api/anniversaries",.method=HTTP_GET,.handler=anniversaries_get},
         {.uri="/api/anniversaries",.method=HTTP_POST,.handler=anniversaries_post},

@@ -21,6 +21,7 @@ STORE=Path(tempfile.mkdtemp(prefix='papercolor-preview-'))
 HOLIDAYS=STORE/'holidays.json'
 HOLIDAYS.write_bytes((ROOT/'main/generated/holidays.json').read_bytes())
 ITEMS=[]
+AUDIO={'volume':60,'keys':False,'boot':False,'chime':'off','chime_start':8,'chime_end':21,'anniv':'off'}
 CARD='--no-card' not in sys.argv
 TIME='--no-time' not in sys.argv
 LIMITS={'e6':120000,'jpg':1600*1024,'json':8192}
@@ -78,7 +79,8 @@ class Handler(BaseHTTPRequestHandler):
                               'has_key':True,'has_password':True,'card':CARD,'time_valid':TIME,'now':int(time.time()),
                               'battery':76,'weather':'fresh','weather_fetched':int(FETCHED),'offline':False,
                               'holiday_first':first,'holiday_last':last,'anniversaries':len(ITEMS),'page':'calendar',
-                              'celebrate_today':False,'fonts':fonts,'onnx':CARD and (SDWEB/'ort/manifest.json').exists()})
+                              'celebrate_today':False,'fonts':fonts,'onnx':CARD and (SDWEB/'ort/manifest.json').exists(),
+                              'audio':AUDIO})
         if url.path=='/api/anniversaries':
             return self.json({'card':CARD,'max':32,'items':ITEMS if CARD else []})
         if url.path=='/api/render':
@@ -146,6 +148,13 @@ class Handler(BaseHTTPRequestHandler):
             ITEMS[:]=[a for a in ITEMS if a['id']!=data.get('id')]
             for k in LIMITS: (STORE/f"{data.get('id')}.{k}").unlink(missing_ok=True)
             return self.reply(True,'已删除')
+        if url.path=='/api/audio':
+            if not CARD: return self.reply(False,'未检测到 TF 卡')
+            AUDIO.update({k:data[k] for k in AUDIO if k in data})
+            return self.reply(True,'声音与报时设置已保存（模拟接口）')
+        if url.path=='/api/audio/test':
+            if data.get('stop'): return self.json({'ok':True,'message':'已停止试听','simulated':True})
+            return self.json({'ok':True,'message':f"正在通过浏览器试听：{data.get('id','')}（模拟环境）",'simulated':True})
         if url.path=='/api/preview':
             return self.reply(True,'预览模拟接口：屏幕不会刷新')
         return self.reply(True,'预览模拟接口：操作成功，未修改设备')

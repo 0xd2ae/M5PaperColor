@@ -14,10 +14,18 @@ typedef struct { int year, month, day; } pc_date_t;
 typedef struct { int year, month, day; bool leap; } pc_lunar_t;
 typedef enum { PC_NORMAL, PC_REST, PC_WORK } pc_day_kind_t;
 typedef struct {
+    int volume;           /* 10..100, default 60 */
+    bool keys, boot;      /* default false (quiet by default) */
+    char chime[20];       /* "off" (default) or melody id */
+    int chime_start, chime_end; /* 0..23, default 8..21 */
+    char anniv[20];       /* "off" (default) or melody id */
+} pc_audio_config_t;
+typedef struct {
     char ssid[33], password[65], host[128], api_key[129];
     char city[97], location[33];
     double latitude, longitude;
     bool coordinates;
+    pc_audio_config_t audio;
 } pc_config_t;
 typedef struct { char date[11], text[64]; int icon, low, high; } pc_forecast_t;
 typedef struct {
@@ -54,6 +62,8 @@ bool pc_holidays_has_year(const pc_holidays_t *table, int year);
 pc_day_kind_t pc_holidays_kind(const pc_holidays_t *table, pc_date_t date, const char **name);
 bool pc_host_valid(const char *host);
 bool pc_location_valid(const char *value);
+void pc_audio_defaults(pc_audio_config_t *audio);
+bool pc_melody_valid(const char *id);
 bool pc_config_valid(const pc_config_t *config);
 /* Wi-Fi and API set and a city name, but no Location ID/coordinates yet (hand-written config.json). */
 bool pc_config_resolvable(const pc_config_t *config);

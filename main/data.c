@@ -116,6 +116,20 @@ bool pc_config_resolvable(const pc_config_t *c)
     for (const char *p=c->api_key;*p;p++) if (!isalnum((unsigned char)*p) && *p!='-' && *p!='_') return false;
     return true;
 }
+void pc_audio_defaults(pc_audio_config_t *a)
+{
+    *a=(pc_audio_config_t){.volume=60,.keys=false,.boot=false,.chime="off",.chime_start=8,.chime_end=21,.anniv="off"};
+}
+bool pc_melody_valid(const char *id)
+{
+    static const char *const IDS[]={
+        "off","bell","westminster","cuckoo","birthday","jasmine","newyear","jingle",
+        "auld_lang_syne","canon","wedding","ode_to_joy","fur_elise","clair_de_lune","castle_sky"
+    };
+    if (!id) return false;
+    for (size_t i=0;i<sizeof(IDS)/sizeof(IDS[0]);i++) if (!strcmp(id,IDS[i])) return true;
+    return false;
+}
 static void optional_text(const cJSON *object,const char *key,char *out,size_t cap)
 {
     if (!text(object,key,out,cap)) out[0]=0;
@@ -125,15 +139,32 @@ bool pc_config_from_json(const char *json,pc_config_t *out)
     cJSON *root=cJSON_Parse(json);
     if (!cJSON_IsObject(root)) { cJSON_Delete(root); return false; }
     pc_config_t c={0};
+    pc_audio_defaults(&c.audio);
     const cJSON *wifi=cJSON_GetObjectItemCaseSensitive(root,"wifi");
     const cJSON *weather=cJSON_GetObjectItemCaseSensitive(root,"qweather");
     const cJSON *city=cJSON_GetObjectItemCaseSensitive(root,"city");
+    const cJSON *audio=cJSON_GetObjectItemCaseSensitive(root,"audio");
     optional_text(wifi,"ssid",c.ssid,sizeof(c.ssid)); optional_text(wifi,"password",c.password,sizeof(c.password));
     optional_text(weather,"host",c.host,sizeof(c.host)); optional_text(weather,"api_key",c.api_key,sizeof(c.api_key));
     optional_text(city,"name",c.city,sizeof(c.city)); optional_text(city,"location",c.location,sizeof(c.location));
     const cJSON *lat=cJSON_GetObjectItemCaseSensitive(city,"latitude"),*lon=cJSON_GetObjectItemCaseSensitive(city,"longitude");
     if (cJSON_IsNumber(lat) && cJSON_IsNumber(lon) && pc_location_valid(c.location)) {
         c.latitude=lat->valuedouble; c.longitude=lon->valuedouble; c.coordinates=true;
+    }
+    if (cJSON_IsObject(audio)) {
+        const cJSON *vol=cJSON_GetObjectItemCaseSensitive(audio,"volume");
+        const cJSON *cs=cJSON_GetObjectItemCaseSensitive(audio,"chime_start");
+        const cJSON *ce=cJSON_GetObjectItemCaseSensitive(audio,"chime_end");
+        const cJSON *keys=cJSON_GetObjectItemCaseSensitive(audio,"keys");
+        const cJSON *boot=cJSON_GetObjectItemCaseSensitive(audio,"boot");
+        char buf[20];
+        if (cJSON_IsNumber(vol) && vol->valueint>=10 && vol->valueint<=100) c.audio.volume=vol->valueint;
+        if (cJSON_IsNumber(cs) && cs->valueint>=0 && cs->valueint<=23) c.audio.chime_start=cs->valueint;
+        if (cJSON_IsNumber(ce) && ce->valueint>=0 && ce->valueint<=23) c.audio.chime_end=ce->valueint;
+        if (cJSON_IsBool(keys)) c.audio.keys=cJSON_IsTrue(keys);
+        if (cJSON_IsBool(boot)) c.audio.boot=cJSON_IsTrue(boot);
+        if (text(audio,"chime",buf,sizeof(buf)) && pc_melody_valid(buf)) strcpy(c.audio.chime,buf);
+        if (text(audio,"anniv",buf,sizeof(buf)) && pc_melody_valid(buf)) strcpy(c.audio.anniv,buf);
     }
     cJSON_Delete(root);
     *out=c; return true;
@@ -142,7 +173,8 @@ char *pc_config_to_json(const pc_config_t *c)
 {
     cJSON *root=cJSON_CreateObject(),*wifi=cJSON_AddObjectToObject(root,"wifi");
     cJSON *weather=cJSON_AddObjectToObject(root,"qweather"),*city=cJSON_AddObjectToObject(root,"city");
-    if (!city) { cJSON_Delete(root); return NULL; }
+    cJSON *audio=cJSON_AddObjectToObject(root,"audio");
+    if (!city || !audio) { cJSON_Delete(root); return NULL; }
     cJSON_AddNumberToObject(root,"version",1);
     cJSON_AddStringToObject(wifi,"ssid",c->ssid); cJSON_AddStringToObject(wifi,"password",c->password);
     cJSON_AddStringToObject(weather,"host",c->host); cJSON_AddStringToObject(weather,"api_key",c->api_key);
@@ -150,6 +182,19 @@ char *pc_config_to_json(const pc_config_t *c)
     if (c->coordinates) {
         cJSON_AddNumberToObject(city,"latitude",c->latitude); cJSON_AddNumberToObject(city,"longitude",c->longitude);
     }
+    pc_audio_config_t a=c->audio;
+    if (a.volume<10 || a.volume>100) a.volume=60;
+    if (!pc_melody_valid(a.chime)) strcpy(a.chime,"off");
+    if (!pc_melody_valid(a.anniv)) strcpy(a.anniv,"off");
+    if (a.chime_start<0 || a.chime_start>23) a.chime_start=8;
+    if (a.chime_end<0 || a.chime_end>23) a.chime_end=21;
+    cJSON_AddNumberToObject(audio,"volume",a.volume);
+    cJSON_AddBoolToObject(audio,"keys",a.keys);
+    cJSON_AddBoolToObject(audio,"boot",a.boot);
+    cJSON_AddStringToObject(audio,"chime",a.chime);
+    cJSON_AddNumberToObject(audio,"chime_start",a.chime_start);
+    cJSON_AddNumberToObject(audio,"chime_end",a.chime_end);
+    cJSON_AddStringToObject(audio,"anniv",a.anniv);
     char *json=cJSON_Print(root); cJSON_Delete(root); return json;
 }
 bool pc_city_parse(const char *body,pc_config_t *config)

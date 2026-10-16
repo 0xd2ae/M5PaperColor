@@ -4,6 +4,7 @@
 #include "anniversary.h"
 #include "fonts.h"
 #include "compression.h"
+#include "audio.h"
 #include "cJSON.h"
 #include <assert.h>
 #include <stdio.h>
@@ -108,7 +109,7 @@ static void anniversary_tests(void)
 {
     pc_anniv_status_t s; char error[96]; pc_anniversary_t a;
     a=anniversary("{\"id\":\"wed\",\"name\":\"结婚纪念日\",\"date\":\"2020-05-20\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"lunar\":null,\"image\":true,\"overlay\":\"top\",\"band\":\"red\"}");
-    assert(a.image && a.overlay_top && a.band==PC_RED && a.yearly && !a.lunar);
+    assert(a.image && a.overlay_top && a.band==PC_RED && a.yearly && !a.lunar && !a.melody[0]);
     assert(pc_anniversary_status(&a,(pc_date_t){2026,10,15},&s) && s.state==PC_ANNIV_UPCOMING && s.days==217 && s.years==7);
     assert(s.next.year==2027 && s.next.month==5 && s.next.day==20 && !s.celebrate);
     assert(pc_anniversary_status(&a,(pc_date_t){2026,5,20},&s) && s.state==PC_ANNIV_TODAY && s.days==0 && s.years==6 && s.celebrate);
@@ -137,6 +138,9 @@ static void anniversary_tests(void)
     assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-02-30\",\"mode\":\"countdown\",\"repeat\":\"once\"}",&a,error,sizeof(error)));
     assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"once\",\"lunar\":{\"month\":1,\"day\":1}}",&a,error,sizeof(error)));
     assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"once\",\"band\":\"pink\"}",&a,error,sizeof(error)));
+    assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"x\",\"date\":\"2026-01-01\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"melody\":\"beep\"}",&a,error,sizeof(error)));
+    a=anniversary("{\"id\":\"song\",\"name\":\"生日\",\"date\":\"2020-01-01\",\"mode\":\"countdown\",\"repeat\":\"yearly\",\"melody\":\"canon\"}");
+    assert(!strcmp(a.melody,"canon"));
     assert(!pc_anniversary_parse_item("{\"id\":\"a\",\"name\":\"\\u00ff\\u00fe\",\"date\":\"2026-01-01\",\"mode\":\"sideways\",\"repeat\":\"once\"}",&a,error,sizeof(error)));
     /* List round trip, upsert, remove and capacity. */
     pc_anniversaries_t *list=calloc(1,sizeof(*list)),*again=calloc(1,sizeof(*again)); assert(list && again);
@@ -172,9 +176,19 @@ static void config_tests(void)
     assert(pc_config_from_json(json,&back)); free(json);
     assert(!strcmp(back.ssid,c.ssid) && !strcmp(back.password,c.password) && !strcmp(back.api_key,c.api_key));
     assert(!strcmp(back.city,"深圳") && !strcmp(back.location,"101280601") && back.coordinates && back.latitude==22.54);
+    assert(!back.audio.keys && !back.audio.boot && back.audio.volume==60 && !strcmp(back.audio.chime,"off") && !strcmp(back.audio.anniv,"off"));
+    c.audio.volume=40; c.audio.keys=true; c.audio.boot=true; c.audio.chime_start=9; c.audio.chime_end=20;
+    strcpy(c.audio.chime,"canon"); strcpy(c.audio.anniv,"birthday");
+    json=pc_config_to_json(&c); assert(json);
+    assert(pc_config_from_json(json,&back)); free(json);
+    assert(back.audio.volume==40 && back.audio.keys && back.audio.boot && back.audio.chime_start==9 && back.audio.chime_end==20);
+    assert(!strcmp(back.audio.chime,"canon") && !strcmp(back.audio.anniv,"birthday"));
+    assert(pc_config_from_json("{\"audio\":{\"chime\":\"nope\",\"volume\":3,\"keys\":true}}",&back));
+    assert(back.audio.keys && !strcmp(back.audio.chime,"off") && back.audio.volume==60 && !back.audio.boot);
     /* The card example: name only, coordinates resolved on first connection. */
     char *example=read_file("sdcard/papercolor/config.example.json");
     assert(pc_config_from_json(example,&back) && !back.coordinates && !strcmp(back.city,"深圳") && !pc_config_valid(&back));
+    assert(!back.audio.keys && !back.audio.boot && !strcmp(back.audio.chime,"off") && !strcmp(back.audio.anniv,"off"));
     free(example);
     assert(!pc_config_from_json("[",&back) && !pc_config_from_json("[]",&back));
     strcpy(c.password,"short"); assert(!pc_config_resolvable(&c));
@@ -239,6 +253,44 @@ static void icon_tests(void)
     assert(pc_render_weather_icon(pixels,0,0,123456,80)==999);
     assert(pc_render_weather_icon(pixels,0,0,-1,20)==999);
     free(pixels);
+}
+static void audio_tests(void)
+{
+    pc_audio_config_t cfg;
+    pc_audio_defaults(&cfg);
+    assert(cfg.volume==60 && !cfg.keys && !cfg.boot && cfg.chime_start==8 && cfg.chime_end==21);
+    assert(!strcmp(cfg.chime,"off") && !strcmp(cfg.anniv,"off") && !pc_chime_hour_allowed(&cfg,8));
+    strcpy(cfg.chime,"bell");
+    assert(pc_chime_hour_allowed(&cfg,8) && pc_chime_hour_allowed(&cfg,21) && !pc_chime_hour_allowed(&cfg,22));
+    cfg.chime_start=22; cfg.chime_end=7;
+    assert(pc_chime_hour_allowed(&cfg,23) && pc_chime_hour_allowed(&cfg,0) && pc_chime_hour_allowed(&cfg,7));
+    assert(!pc_chime_hour_allowed(&cfg,12) && !pc_chime_hour_allowed(NULL,8) && !pc_chime_hour_allowed(&cfg,-1));
+    assert(pc_melody_valid("off") && pc_melody_valid("castle_sky") && !pc_melody_valid("_boot") && !pc_melody_valid("nope"));
+    int playable=0;
+    for (size_t i=0;i<pc_melody_count();i++) {
+        const pc_melody_info_t *m=pc_melody_at(i);
+        assert(m && m->count && m->notes && pc_melody_lookup(m->id)==m && pc_synth_render(m->id,60,NULL,0)>0);
+        if (m->id[0]!='_') { assert(pc_melody_valid(m->id)); playable++; }
+    }
+    assert(playable==14 && !pc_melody_lookup("off") && !pc_synth_render("off",60,NULL,0) && !pc_melody_at(pc_melody_count()));
+    size_t n=pc_synth_render("bell",60,NULL,0);
+    int16_t *pcm=calloc(n,sizeof(*pcm)),*again=calloc(n,sizeof(*again));
+    assert(pcm && again && pc_synth_render("bell",60,pcm,n)==n);
+    assert(pc_synth_render("bell",60,again,n)==n && !memcmp(pcm,again,n*sizeof(*pcm)));
+    int peak=0;
+    for (size_t i=0;i<n;i++) { int v=pcm[i]<0?-pcm[i]:pcm[i]; if (v>peak) peak=v; }
+    assert(peak>4000 && peak<32767);
+    assert(pc_synth_render("bell",0,pcm,n)==n);
+    for (size_t i=0;i<n;i++) assert(!pcm[i]);
+    free(pcm); free(again);
+    n=pc_synth_render("birthday",80,NULL,0);
+    pcm=calloc(n,sizeof(*pcm));
+    assert(pcm && n<PC_AUDIO_SAMPLE_RATE*15 && pc_synth_render("birthday",80,pcm,n)==n);
+    for (size_t i=0;i<8;i++) assert((pcm[i]<0?-pcm[i]:pcm[i])<4000);
+    peak=0;
+    for (size_t i=0;i<n;i++) { int v=pcm[i]<0?-pcm[i]:pcm[i]; if (v>peak) peak=v; }
+    assert(peak>8000 && peak<=32767);
+    free(pcm);
 }
 static void previews(pc_holidays_t *table)
 {
@@ -334,7 +386,7 @@ int main(void)
 {
     setenv("TZ","CST-8",1); tzset();
     calendar_tests(); pc_holidays_t *table=holiday_tests(); button_tests(); action_tests(); weather_tests(); gzip_tests(); icon_tests();
-    anniversary_tests(); draft_tests(); config_tests(); font_tests(); previews(table); anniversary_previews(); pc_holidays_free(table);
+    anniversary_tests(); draft_tests(); config_tests(); font_tests(); audio_tests(); previews(table); anniversary_previews(); pc_holidays_free(table);
     pc_fonts_open(NULL);
-    puts("Calendar, holidays, buttons, weather, anniversary, config, font and render checks passed");
+    puts("Calendar, holidays, buttons, weather, anniversary, config, font, audio and render checks passed");
 }

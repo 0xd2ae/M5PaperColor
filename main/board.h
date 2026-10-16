@@ -18,3 +18,5 @@ esp_err_t pc_rtc_arm(unsigned seconds);
 int pc_battery_percent(void);
 esp_err_t pc_board_led_power(bool on);
 esp_err_t pc_climate_read(int *temperature_x10,int *humidity);
+esp_err_t pc_board_codec_write(uint8_t reg,uint8_t value);
+void pc_board_audio_power(bool codec_on,bool spk_on);

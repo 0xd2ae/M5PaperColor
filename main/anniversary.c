@@ -63,6 +63,11 @@ static bool from_object(const cJSON *o,pc_anniversary_t *out,char *error,size_t 
         if (i==6) return fail(error,capacity,"文字条颜色无效");
         a.band=(pc_color_t)i;
     }
+    const char *melody=string(o,"melody");
+    if (melody && *melody) {
+        if (!pc_melody_valid(melody)) return fail(error,capacity,"纪念日音乐无效");
+        strcpy(a.melody,melody);
+    }
     *out=a; return true;
 }
 bool pc_anniversary_parse_item(const char *json,pc_anniversary_t *out,char *error,size_t capacity)
@@ -109,6 +114,7 @@ char *pc_anniversaries_json(const pc_anniversaries_t *list)
         cJSON_AddBoolToObject(o,"image",a->image);
         cJSON_AddStringToObject(o,"overlay",a->overlay_top?"top":"bottom");
         cJSON_AddStringToObject(o,"band",BANDS[a->band]);
+        if (a->melody[0]) cJSON_AddStringToObject(o,"melody",a->melody);
     }
     char *json=cJSON_PrintUnformatted(root); cJSON_Delete(root); return json;
 }

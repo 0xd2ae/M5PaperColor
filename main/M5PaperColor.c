@@ -1,6 +1,7 @@
 #include "board.h"
 #include "buttons.h"
 #include "led.h"
+#include "audio.h"
 #include "services.h"
 #include "render.h"
 #include "sdcard.h"
@@ -28,7 +29,7 @@ static RTC_DATA_ATTR int view_year,view_month;
 static RTC_DATA_ATTR int64_t browse_until;
 static RTC_DATA_ATTR bool last_offline;
 /* auto_page: the anniversary page was chosen because today is an anniversary, not by the user. */
-static RTC_DATA_ATTR int page,anniv_index,dismissed_day;
+static RTC_DATA_ATTR int page,anniv_index,dismissed_day,last_chime_slot,last_anniv_sound_day;
 static RTC_DATA_ATTR bool auto_page;
 static const uint32_t MAGIC=0x50434331;
 static pc_config_t config;
@@ -52,6 +53,7 @@ static void enqueue(unsigned action)
     pc_actions_add(&pending,action,esp_timer_get_time());
     portEXIT_CRITICAL(&lock);
     pc_led_attended();
+    pc_audio_key(action,&config.audio);
 }
 static void read_indoor(void)
 {
@@ -264,6 +266,18 @@ static void leave_anniversary(void)
     if (current_date(&d) && pc_anniversaries_today(&anniversaries,d)>=0) dismissed_day=pc_day_number(d);
     page=PAGE_CALENDAR; auto_page=false;
 }
+static const char *anniv_melody(int index)
+{
+    const char *m=config.audio.anniv;
+    if (index>=0 && index<anniversaries.count && anniversaries.items[index].melody[0])
+        m=anniversaries.items[index].melody;
+    return pc_melody_lookup(m)?m:NULL;
+}
+static void play_anniv_if_enabled(int index)
+{
+    const char *m=anniv_melody(index);
+    if (m) pc_audio_play(m,config.audio.volume);
+}
 static void auto_select(void)
 {
     pc_date_t d;
@@ -272,6 +286,27 @@ static void auto_select(void)
     if (i>=0 && dismissed_day!=pc_day_number(d)) {
         if (page!=PAGE_ANNIVERSARY || auto_page) { page=PAGE_ANNIVERSARY; anniv_index=i; auto_page=true; }
     } else if (auto_page) { page=PAGE_CALENDAR; auto_page=false; }
+}
+static void scheduled_chime(void)
+{
+    if (battery>=0 && battery<=10) return;
+    time_t now=time(NULL); struct tm t; localtime_r(&now,&t);
+    pc_date_t d={t.tm_year+1900,t.tm_mon+1,t.tm_mday};
+    if (d.year<2000 || d.year>2099) return;
+    int day=pc_day_number(d),slot=day*24+t.tm_hour;
+    bool allowed=pc_chime_hour_allowed(&config.audio,t.tm_hour);
+    if (page==PAGE_ANNIVERSARY && auto_page && last_anniv_sound_day!=day) {
+        const char *m=anniv_melody(anniv_index);
+        if (m && (t.tm_hour>=8 && t.tm_hour<=21)) {
+            last_anniv_sound_day=day; last_chime_slot=slot;
+            pc_audio_play(m,config.audio.volume);
+            return;
+        }
+    }
+    if (allowed && t.tm_min<=2 && last_chime_slot!=slot) {
+        last_chime_slot=slot;
+        pc_audio_play(config.audio.chime,config.audio.volume);
+    }
 }
 static void setup_mode(void)
 {
@@ -286,7 +321,12 @@ static void setup_mode(void)
         portEXIT_CRITICAL(&lock);
         if (exit || pc_setup_finished() || esp_timer_get_time()-pc_setup_activity()>600000000) break;
         char id[17];
-        if (pc_setup_preview(id)) { pc_preview_reload(PC_RELOAD_ANNIVERSARIES); draw_anniversary(id,true); }
+        if (pc_setup_preview(id)) {
+            pc_preview_reload(PC_RELOAD_ANNIVERSARIES);
+            int idx=pc_anniversaries_find(&anniversaries,id);
+            play_anniv_if_enabled(idx);
+            draw_anniversary(id,true);
+        }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     pc_setup_stop();
@@ -320,6 +360,7 @@ static void sleep_until_next(void)
     uint64_t mask=PC_KEY_MASK;
     if (err==ESP_OK) mask|=1ULL<<7;
     else ESP_LOGW(TAG,"RTC arm failed; using ESP timer: %s",esp_err_to_name(err));
+    pc_audio_shutdown();
     bool had_card=card;
     card_down();
     err=pc_board_quiet(); if (err!=ESP_OK) ESP_LOGW(TAG,"peripheral shutdown: %s",esp_err_to_name(err));
@@ -335,6 +376,7 @@ static void sleep_until_next(void)
     bool has_pending=pending.today||pending.setup||pending.page||pending.delta;
     portEXIT_CRITICAL(&lock);
     if (!has_pending) { ESP_LOGI(TAG,"sleep %u seconds",seconds); pc_led_shutdown(); esp_deep_sleep_start(); }
+    pc_audio_resume();
     if (had_card) card_up();
 }
 void app_main(void)
@@ -364,8 +406,13 @@ void app_main(void)
     bool button_wake=(wake&PC_KEY_MASK)!=0;
     esp_err_t led_err=pc_led_init(power_boot||button_wake);
     if (led_err!=ESP_OK) ESP_LOGW(TAG,"RGB LED init failed: %s",esp_err_to_name(led_err));
+    esp_err_t audio_err=pc_audio_init();
+    if (audio_err!=ESP_OK) ESP_LOGW(TAG,"audio init failed: %s",esp_err_to_name(audio_err));
     update_battery();
-    if (power_boot) pc_led_boot();
+    if (power_boot) {
+        pc_led_boot();
+        if (config.audio.boot) pc_audio_play("_boot",config.audio.volume);
+    }
     offline=retained_magic==MAGIC?last_offline:true;
     if (retained_magic!=MAGIC || !browse_until || time(NULL)>=browse_until) return_today();
     if (button_wake) {
@@ -387,6 +434,7 @@ void app_main(void)
         if (page==PAGE_CALENDAR && (!weather.valid || time(NULL)-weather.fetched>=3500 || power_boot || !pc_config_valid(&config)))
             update_weather();
         if (!browse_until || time(NULL)>=browse_until) return_today();
+        if (!power_boot || !config.audio.boot) scheduled_chime();
         draw(false);
     }
     int64_t awake_until=esp_timer_get_time()+2000000;
@@ -397,7 +445,7 @@ void app_main(void)
             else {
                 if (a.page) {
                     if (page==PAGE_ANNIVERSARY) leave_anniversary();
-                    else { page=PAGE_ANNIVERSARY; auto_page=false; }
+                    else { page=PAGE_ANNIVERSARY; auto_page=false; play_anniv_if_enabled(anniv_index); }
                 }
                 if (a.today) {
                     if (page==PAGE_ANNIVERSARY) leave_anniversary();
@@ -407,11 +455,12 @@ void app_main(void)
                     int n=anniversaries.count;
                     if (n) anniv_index=((anniv_index+a.delta)%n+n)%n;
                     auto_page=false;
+                    play_anniv_if_enabled(anniv_index);
                 } else if (a.delta) { pc_shift_month(&view_year,&view_month,a.delta); browse_until=time(NULL)+300; }
             }
             draw(false); awake_until=esp_timer_get_time()+1500000;
         }
-        if (esp_timer_get_time()>awake_until && esp_timer_get_time()-last_refresh_attempt>1000000) sleep_until_next();
+        if (esp_timer_get_time()>awake_until && esp_timer_get_time()-last_refresh_attempt>1000000 && !pc_audio_busy()) sleep_until_next();
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
