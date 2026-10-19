@@ -172,9 +172,11 @@ window.addEventListener('scroll',onScroll,{passive:true});$('editor').addEventLi
 window.addEventListener('resize',()=>{onScroll();measureDock()});wide.addEventListener?.('change',()=>{onScroll();measureDock()});
 
 /* ---------- Tabs ---------- */
+let scannedOnce=false;
 function showTab(name){
   for(const t of $$('.tab')){const on=t.dataset.tab===name;t.setAttribute('aria-selected',String(on));$('tab-'+t.dataset.tab).hidden=!on}
   if(name==='anniv'&&pv.mode==='calendar'&&items.length)previewAnniversary(pv.id);
+  if(name==='settings'&&!scannedOnce){scannedOnce=true;scanWifiSilent()}
   if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
   window.scrollTo(0,0);onScroll();
 }
@@ -187,13 +189,61 @@ function stat(label,value,detail,state='good'){
   el.innerHTML='<span><i></i></span><b></b><small></small>';el.querySelector('span').append(label);el.querySelector('b').textContent=value;el.querySelector('small').textContent=detail||'';return el;
 }
 function fonts(){const f=device.fonts||[];return f.length?f.map(s=>s+' px').join('、'):'仅内置字库'}
+function applyWifiProfileToForm(ssid){
+  const w=(device.wifis||[]).find(x=>x.ssid===ssid);
+  if(w){
+    $('passwordHint').textContent=w.has_password?'已保存该 Wi-Fi 密码，留空即沿用原密码；填写新密码则覆盖。':'该 Wi-Fi 已保存为开放网络（无密码）。';
+    if(w.location&&w.city){$('city').replaceChildren(new Option(`${w.city}（已绑定）`,w.location));$('city').value=w.location}
+  }else if(device.has_password&&ssid===device.ssid){
+    $('passwordHint').textContent='Wi-Fi 名称不变时，留空沿用原密码；改了名称后留空表示开放网络。';
+  }else{
+    $('passwordHint').textContent='开放网络可留空。';
+  }
+}
+function renderSavedWifis(){
+  const list=device.wifis||[],box=$('savedWifiBox'),wrap=$('savedWifiList');
+  if(!box||!wrap)return;
+  if(!list.length){box.hidden=true;wrap.replaceChildren();return}
+  box.hidden=false;wrap.replaceChildren();
+  for(const w of list){
+    const row=document.createElement('div');
+    row.className='row';row.style.cssText='align-items:center;gap:6px';
+    const pick=document.createElement('button');
+    pick.type='button';pick.className='keep';
+    pick.style.cssText='flex:1;text-align:left;display:flex;justify-content:space-between;align-items:center;padding:8px 10px;font-size:13px';
+    const left=document.createElement('span');
+    left.textContent=`${w.ssid} · ${w.city||'未绑定城市'}`;
+    const badge=document.createElement('small');
+    badge.style.cssText='color:var(--muted);margin-left:8px';
+    badge.textContent=w.active?'当前生效':'点击选择';
+    pick.append(left,badge);
+    pick.onclick=()=>{
+      $('ssid').value=w.ssid;$('password').value='';
+      applyWifiProfileToForm(w.ssid);
+      toast(`已载入 Wi-Fi「${w.ssid}」${w.city?`（绑定城市：${w.city}）`:''}`);
+    };
+    const del=document.createElement('button');
+    del.type='button';del.className='danger';
+    del.style.cssText='flex:none;padding:8px 10px;font-size:13px';
+    del.textContent='删除';
+    del.onclick=()=>action(async wait=>{
+      wait(`正在删除 Wi-Fi「${w.ssid}」…`);
+      const r=await ok(post('/api/wifi/delete',{ssid:w.ssid}));
+      await refreshStatus().catch(()=>{});
+      return r.message;
+    },$('wifiResult'));
+    row.append(pick,del);
+    wrap.append(row);
+  }
+}
 function renderStatus(){
   const d=deviceDate(),s=device;
+  const wifiCount=(s.wifis||[]).length;
   const weather=s.weather==='fresh'?['正常',`更新于 ${time2(s.weather_fetched)}`,'good']:s.weather==='stale'?['已过期',`上次 ${time2(s.weather_fetched)}`,'warn']:['暂无数据','连接 Wi-Fi 并保存城市后获取','bad'];
   const page=s.page==='anniversary'?'纪念日页':'日历页';
   $('stats').replaceChildren(
     stat('设备时间',d?`${d.year}-${pad(d.month)}-${pad(d.day)} ${pad(d.hour)}:${pad(d.minute)}`:'未同步',d?'北京时间':'连接 Wi-Fi 后自动校时',d?'good':'bad'),
-    stat('Wi-Fi',s.ssid||'未设置',s.ssid?(s.offline?'上次联网失败':'已保存'):'在“设置”中填写',s.ssid?(s.offline?'warn':'good'):'bad'),
+    stat('Wi-Fi',s.ssid||'未设置',s.ssid?(s.offline?'上次联网失败':wifiCount>1?`已存 ${wifiCount} 个网络自动切换`:'已保存'):'在“设置”中填写',s.ssid?(s.offline?'warn':'good'):'bad'),
     stat('天气 · '+(s.city||'未设置'),weather[0],weather[1],weather[2]),
     stat('TF 卡',s.card?'已插入':'未检测到',s.card?fonts():'配置无法保存',s.card?'good':'bad'),
     stat('电量',`${s.battery??'—'}%`,s.battery<20?'请尽快充电':'',s.battery<20?'warn':'good'),
@@ -211,13 +261,14 @@ function renderStatus(){
     stat('扩展字库',(s.fonts||[]).length?fonts():'未安装',(s.fonts||[]).length===3?'名称大字清晰显示':'缺字显示为 ?',(s.fonts||[]).length===3?'good':'warn'),
     stat('AI 模型',s.onnx?'已安装':'未安装',s.onnx?'编辑图片时可用“AI 自动”':'可选，仅用于图片预处理',s.onnx?'good':'off'));
   $('cardWarning').hidden=s.card!==false;$('annivNoCard').hidden=s.card!==false;$('annivBody').hidden=s.card===false;
+  renderSavedWifis();
 }
 let settingsFilled=false;
 async function refreshStatus(){
   device=await getJSON('/api/status');renderStatus();
   if(settingsFilled)return;settingsFilled=true;
   $('ssid').value=device.ssid||'';$('host').value=device.host||'';
-  if(device.has_password)$('passwordHint').textContent='Wi-Fi 名称不变时，留空沿用原密码；改了名称后留空表示开放网络。';
+  applyWifiProfileToForm(device.ssid||'');
   if(device.has_key)$('keyHint').textContent='API Host 不变时，留空沿用已保存的凭据。';
   if(device.location){$('city').replaceChildren(new Option(device.city,device.location));$('city').value=device.location}
   const a=device.audio||{};
@@ -226,14 +277,61 @@ async function refreshStatus(){
   $('audioChime').value=a.chime||'off';$('audioChimeStart').value=a.chime_start??8;$('audioChimeEnd').value=a.chime_end??21;
   $('audioAnniv').value=a.anniv||'off';$('chimeHoursRow').hidden=$('audioChime').value==='off';
 }
+function populateScanList(aps){
+  const sel=$('wifiScanSelect');
+  if(!aps||!aps.length){sel.replaceChildren(new Option('未扫描到 2.4 GHz Wi-Fi，可重试或手动输入',''));return}
+  sel.replaceChildren(new Option(`扫描到 ${aps.length} 个 2.4 GHz Wi-Fi，点此选择…`,''));
+  for(const ap of aps){
+    const sig=ap.rssi>=-55?'信号极好':ap.rssi>=-67?'信号良好':ap.rssi>=-78?'信号一般':'信号较弱';
+    const lock=ap.auth?'🔒':'开放';
+    const saved=ap.saved?(ap.city?` [已存 · ${ap.city}]`:' [已存]'):'';
+    sel.append(new Option(`${ap.ssid}（${sig} ${ap.rssi}dBm · ${lock}）${saved}`,ap.ssid));
+  }
+  if($('ssid').value&&aps.some(a=>a.ssid===$('ssid').value))sel.value=$('ssid').value;
+}
+async function scanWifiSilent(){
+  try{
+    $('wifiScanSelect').replaceChildren(new Option('正在扫描周围 2.4 GHz Wi-Fi…',''));
+    const r=await getJSON('/api/wifi/scan');
+    populateScanList(r.aps||[]);
+  }catch(e){
+    $('wifiScanSelect').replaceChildren(new Option('点击右侧“扫描”自动查找周围 Wi-Fi',''));
+  }
+}
+$('scanWifi').onclick=()=>action(async wait=>{
+  wait('正在扫描周围 2.4 GHz Wi-Fi（约 1–2 秒）…');
+  const r=await getJSON('/api/wifi/scan');
+  const aps=r.aps||[];
+  populateScanList(aps);
+  if(aps.length&&!$('ssid').value){$('ssid').value=aps[0].ssid;$('wifiScanSelect').value=aps[0].ssid;applyWifiProfileToForm(aps[0].ssid)}
+  return aps.length?`扫描到 ${aps.length} 个 2.4 GHz Wi-Fi，可在下拉框中选择`:'未扫描到 2.4 GHz Wi-Fi，请确认路由器开启了 2.4 GHz 频段';
+},$('wifiResult'));
+$('wifiScanSelect').onchange=()=>{
+  const v=$('wifiScanSelect').value;
+  if(!v)return;
+  $('ssid').value=v;$('password').value='';
+  applyWifiProfileToForm(v);
+};
+$('ssid').oninput=()=>applyWifiProfileToForm($('ssid').value.trim());
 function renderChips(){
   const chips=[['','日历'],...items.map(a=>[a.id,a.name])].map(([id,name])=>{const b=document.createElement('button');b.className='chip keep';b.dataset.id=id;b.textContent=name;
     b.onclick=()=>id?previewAnniversary(id):previewCalendar(0,0);return b});
   if(device.card&&!items.length){const b=document.createElement('button');b.className='chip keep';b.dataset.id='-';b.textContent='纪念日页';b.onclick=()=>previewAnniversary('');chips.push(b)}
   $('chips').replaceChildren(...chips);updateControls();
 }
+function audioPayload(){
+  return {volume:+$('audioVol').value,keys:$('audioKeys').checked,boot:$('audioBoot').checked,
+    chime:$('audioChime').value,chime_start:+$('audioChimeStart').value,chime_end:+$('audioChimeEnd').value,anniv:$('audioAnniv').value};
+}
+async function syncAudioIfDirty(){
+  if(!settingsFilled)return;
+  const p=audioPayload(),a=device.audio||{};
+  if(p.volume===(a.volume??60)&&p.keys===!!a.keys&&p.boot===!!a.boot&&p.chime===(a.chime||'off')&&
+     p.chime_start===(a.chime_start??8)&&p.chime_end===(a.chime_end??21)&&p.anniv===(a.anniv||'off'))return;
+  await ok(post('/api/audio',p));device.audio=p;
+}
 function ended(text){$('ended').hidden=false;showTab('screen');toast(text)}
-$('exit').onclick=()=>action(async()=>{const r=await ok(post('/api/exit',{}));ended(r.message);return r.message},$('exitResult'));
+$('exit').onclick=()=>action(async()=>{await syncAudioIfDirty().catch(()=>{});const r=await ok(post('/api/exit',{}));ended(r.message);return r.message},$('exitResult'));
 
 /* ---------- Settings ---------- */
 const MELODIES=[
@@ -296,15 +394,30 @@ $('aTestMelody').onclick=()=>{const m=$('aMelody').value||$('audioAnniv').value|
 $('stopAudio').onclick=async()=>{stopWebAudio();try{const r=await ok(post('/api/audio/test',{stop:true}));note($('audioResult'),r.message,'ok')}catch(e){}};
 $('saveAudio').onclick=()=>action(async wait=>{
   wait('正在保存声音与报时设置…');
-  const payload={volume:+$('audioVol').value,keys:$('audioKeys').checked,boot:$('audioBoot').checked,
-    chime:$('audioChime').value,chime_start:+$('audioChimeStart').value,chime_end:+$('audioChimeEnd').value,anniv:$('audioAnniv').value};
+  const payload=audioPayload();
   const r=await ok(post('/api/audio',payload));await refreshStatus().catch(()=>{});return r.message;
 },$('audioResult'));
-$('connect').onclick=()=>action(async wait=>{wait('正在连接 Wi-Fi 并校时，最多约 30 秒…');const r=await ok(post('/api/connect',{ssid:$('ssid').value,password:$('password').value}));
-  await refreshStatus().catch(()=>{});if(pv.mode==='calendar')previewCalendar();return r.message},$('wifiResult'));
+$('connect').onclick=()=>action(async wait=>{wait('正在连接 Wi-Fi 并校时，最多约 20 秒…');const r=await ok(post('/api/connect',{ssid:$('ssid').value.trim(),password:$('password').value}));
+  await refreshStatus().catch(()=>{});applyWifiProfileToForm($('ssid').value.trim());if(pv.mode==='calendar')previewCalendar();return r.message},$('wifiResult'));
 $('search').onclick=()=>action(async wait=>{wait('正在搜索城市…');const r=await post('/api/cities',{...api(),query:$('query').value.trim()});if(!r.location)throw Error(r.message||'没有找到城市');
   $('city').replaceChildren(...r.location.map(c=>new Option([c.adm1,c.adm2,c.name].filter(Boolean).join(' / '),c.id)));return `找到 ${r.location.length} 个结果，请选择后保存`},$('weatherResult'));
-$('save').onclick=()=>action(async wait=>{if(!$('city').value)throw Error('请先选择城市');wait('正在验证天气并保存…');const r=await ok(post('/api/save',{...api(),location:$('city').value}));ended(r.message);return r.message},$('weatherResult'));
+async function saveWifiAndCity(wait,stay){
+  if(!$('city').value)throw Error('请先选择城市');
+  const ssid=$('ssid').value.trim();
+  if(!ssid)throw Error('请先选择或填写 Wi-Fi 名称');
+  wait('正在验证天气并保存 Wi-Fi 与绑定地区…');
+  await syncAudioIfDirty().catch(()=>{});
+  const r=await ok(post('/api/save',{...api(),ssid,password:$('password').value,location:$('city').value,stay}));
+  if(stay){
+    $('password').value='';
+    await refreshStatus().catch(()=>{});
+    if(pv.mode==='calendar')previewCalendar();
+    return r.message;
+  }
+  ended(r.message);return r.message;
+}
+$('save').onclick=()=>action(wait=>saveWifiAndCity(wait,false),$('weatherResult'));
+$('saveStay').onclick=()=>action(wait=>saveWifiAndCity(wait,true),$('weatherResult'));
 $('holidays').onchange=()=>{$('holidayFile').textContent=$('holidays').files[0]?.name||'选择年度表 JSON 文件'};
 $('import').onclick=()=>action(async wait=>{const f=$('holidays').files[0];if(!f)throw Error('请选择 JSON 文件');if(f.size>60000)throw Error('年度表不能超过 60 KB');
   const content=await f.text();try{JSON.parse(content)}catch(e){throw Error('不是有效的 JSON 文件')}

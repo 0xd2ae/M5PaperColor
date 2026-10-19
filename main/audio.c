@@ -202,41 +202,69 @@ bool pc_chime_hour_allowed(const pc_audio_config_t *cfg, int hour)
     return s <= e ? (hour >= s && hour <= e) : (hour >= s || hour <= e);
 }
 
-static double midi_freq(uint8_t note)
+static float midi_freq(uint8_t note)
 {
-    return 440.0 * pow(2.0, ((int)note - 69) / 12.0);
+    return 440.0f * powf(2.0f, ((int)note - 69) / 12.0f);
 }
 
-/* Synthesizes a realistic music-box tine pluck (fundamental + decaying 2nd & 3rd harmonics + bell strike). */
-static void add_tine(int16_t *out, size_t max_samples, size_t start, uint8_t midi, uint16_t step_ms, double gain)
+#if defined(__GNUC__) && !defined(__clang__)
+#define PC_AUDIO_FAST __attribute__((optimize("O2")))
+#else
+#define PC_AUDIO_FAST
+#endif
+
+/* Synthesizes a realistic music-box tine pluck (fundamental + decaying 2nd & 3rd harmonics + bell strike).
+ * Uses a single-precision damped-phasor recurrence so ESP32-S3's hardware FPU renders a full song in <10 ms
+ * instead of calling software-emulated double sin()/exp() millions of times. */
+static PC_AUDIO_FAST void add_tine(int16_t *out, size_t max_samples, size_t start, uint8_t midi, uint16_t step_ms, float gain)
 {
-    if (!midi || start >= max_samples) return;
-    double freq = midi_freq(midi);
+    if (!midi || gain <= 0.0f || start >= max_samples) return;
+    float freq = midi_freq(midi);
     /* Music-box tines ring longer than the step interval, overlapping softly with the next note. */
-    size_t ring_samples = (size_t)(PC_AUDIO_SAMPLE_RATE * ((double)step_ms * 1.45 + 140.0) / 1000.0);
+    size_t ring_samples = (size_t)(PC_AUDIO_SAMPLE_RATE * ((float)step_ms * 1.45f + 140.0f) / 1000.0f);
     if (start + ring_samples > max_samples) ring_samples = max_samples - start;
-    double w1 = 2.0 * 3.14159265358979323846 * freq / PC_AUDIO_SAMPLE_RATE;
-    double w2 = w1 * 2.0, w3 = w1 * 4.0;
+    float w1 = 2.0f * 3.14159265358979323846f * freq / (float)PC_AUDIO_SAMPLE_RATE;
+    float w2 = w1 * 2.0f, w3 = w1 * 4.0f;
     /* Keep harmonics below Nyquist. */
-    double h2 = (freq * 2.0 < 7200.0) ? 0.28 : 0.0;
-    double h3 = (freq * 4.0 < 7200.0) ? 0.10 : 0.0;
+    float h2 = (freq * 2.0f < 7200.0f) ? 0.28f : 0.0f;
+    float h3 = (freq * 4.0f < 7200.0f) ? 0.10f : 0.0f;
     size_t attack = PC_AUDIO_SAMPLE_RATE * 3 / 1000; /* 3 ms de-clicked attack */
-    double tau1 = PC_AUDIO_SAMPLE_RATE * (0.24 + (double)step_ms * 0.00055);
-    double tau2 = tau1 * 0.35, tau3 = PC_AUDIO_SAMPLE_RATE * 0.025;
+    float inv_attack = 1.0f / (float)attack;
+    float inv_release = 1.0f / 240.0f;
+    float tau1 = (float)PC_AUDIO_SAMPLE_RATE * (0.24f + (float)step_ms * 0.00055f);
+    float tau2 = tau1 * 0.35f, tau3 = (float)PC_AUDIO_SAMPLE_RATE * 0.025f;
+    float r1 = expf(-1.0f / tau1), c1 = r1 * cosf(w1), s1 = r1 * sinf(w1);
+    float r2 = h2 ? expf(-1.0f / tau2) : 0.0f, c2 = r2 * cosf(w2), s2 = r2 * sinf(w2);
+    float r3 = h3 ? expf(-1.0f / tau3) : 0.0f, c3 = r3 * cosf(w3), s3 = r3 * sinf(w3);
+    float amp = gain * 18500.0f;
+    float x1 = amp, y1 = 0.0f;
+    float x2 = amp * h2, y2 = 0.0f;
+    float x3 = amp * h3, y3 = 0.0f;
+    int16_t *dst = out + start;
     for (size_t i = 0; i < ring_samples; i++) {
-        double env = (i < attack) ? ((double)i / (double)attack) : 1.0;
+        float env = (i < attack) ? ((float)i * inv_attack) : 1.0f;
         /* Smooth fade-out at the end of the ring window so there is never a truncation click. */
-        if (i + 240 > ring_samples) env *= (double)(ring_samples - i) / 240.0;
-        double e1 = exp(-(double)i / tau1);
-        double e2 = h2 ? exp(-(double)i / tau2) : 0.0;
-        double e3 = h3 ? exp(-(double)i / tau3) : 0.0;
-        double sample = env * gain * (e1 * sin(w1 * (double)i) + h2 * e2 * sin(w2 * (double)i) + h3 * e3 * sin(w3 * (double)i));
-        int32_t v = (int32_t)out[start + i] + (int32_t)(sample * 16500.0);
-        out[start + i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+        if (i + 240 > ring_samples) env *= (float)(ring_samples - i) * inv_release;
+        float sample = env * (y1 + y2 + y3);
+        int32_t v = (int32_t)dst[i] + (int32_t)sample;
+        dst[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+        float nx1 = x1 * c1 - y1 * s1;
+        y1 = x1 * s1 + y1 * c1;
+        x1 = nx1;
+        if (h2) {
+            float nx2 = x2 * c2 - y2 * s2;
+            y2 = x2 * s2 + y2 * c2;
+            x2 = nx2;
+        }
+        if (h3) {
+            float nx3 = x3 * c3 - y3 * s3;
+            y3 = x3 * s3 + y3 * c3;
+            x3 = nx3;
+        }
     }
 }
 
-size_t pc_synth_render(const char *id, int volume_percent, int16_t *out, size_t max_samples)
+PC_AUDIO_FAST size_t pc_synth_render(const char *id, int volume_percent, int16_t *out, size_t max_samples)
 {
     const pc_melody_info_t *m = pc_melody_lookup(id);
     if (!m || !m->count) return 0;
@@ -247,12 +275,12 @@ size_t pc_synth_render(const char *id, int volume_percent, int16_t *out, size_t 
     size_t n = needed < max_samples ? needed : max_samples;
     memset(out, 0, n * sizeof(int16_t));
     int vol = volume_percent < 0 ? 0 : volume_percent > 100 ? 100 : volume_percent;
-    double scale = (double)vol / 100.0;
+    float scale = (float)vol / 100.0f;
     size_t cursor = 0;
     for (size_t i = 0; i < m->count; i++) {
         const pc_note_t *note = &m->notes[i];
-        if (note->lead) add_tine(out, n, cursor, note->lead, note->ms, 0.72 * scale);
-        if (note->bass) add_tine(out, n, cursor, note->bass, note->ms, 0.36 * scale);
+        if (note->lead) add_tine(out, n, cursor, note->lead, note->ms, 0.72f * scale);
+        if (note->bass) add_tine(out, n, cursor, note->bass, note->ms, 0.36f * scale);
         cursor += (size_t)((uint64_t)note->ms * PC_AUDIO_SAMPLE_RATE / 1000);
     }
     return n;
@@ -277,10 +305,17 @@ static int req_vol = 60;
 static volatile uint32_t req_gen, done_gen;
 static volatile bool playing, shutting_down;
 
+static void delay_ms(unsigned ms)
+{
+    /* With CONFIG_FREERTOS_HZ=100 (10 ms/tick), +1 guarantees at least `ms` elapsed even near a tick boundary. */
+    vTaskDelay(pdMS_TO_TICKS(ms) + 1);
+}
+
 static esp_err_t es8311_setup(void)
 {
     /* Slave DAC, 16-bit I2S, MCLK = 256*Fs = 4.096 MHz. Register values follow Espressif's
-     * es8311 driver (Apache-2.0) for the 4096000 Hz / 16000 Hz coefficient row. */
+     * es8311 driver (Apache-2.0) for the 4096000 Hz / 16000 Hz coefficient row, with 0x32=0xcf
+     * matching M5Unified on PaperColor to compensate for the 150 kOhm AW8737A input resistors. */
     static const uint8_t init[][2] = {
         {0x44, 0x08}, {0x44, 0x08},
         {0x01, 0x30}, {0x02, 0x00}, {0x03, 0x10}, {0x16, 0x24}, {0x04, 0x10}, {0x05, 0x00},
@@ -293,20 +328,25 @@ static esp_err_t es8311_setup(void)
         {0x13, 0x10}, {0x1b, 0x0a}, {0x1c, 0x6a}, {0x44, 0x08},
         {0x17, 0xbf}, {0x0e, 0x02}, {0x12, 0x00}, {0x14, 0x1a}, {0x0d, 0x01}, {0x15, 0x40},
         {0x37, 0x08}, {0x45, 0x00},
-        {0x32, 0xbf}, /* DAC volume; waveform amplitude is scaled in the synthesizer */
+        {0x32, 0xcf}, /* DAC volume (+8 dB for PaperColor's 150 kOhm AW8737A input network) */
     };
     for (size_t i = 0; i < sizeof(init) / sizeof(init[0]); i++)
         ESP_RETURN_ON_ERROR(pc_board_codec_write(init[i][0], init[i][1]), TAG, "es8311 reg 0x%02x", init[i][0]);
     return ESP_OK;
 }
 
-static void power_off_hw(bool *powered)
+static void power_off_hw(bool *powered, bool *i2s_on)
 {
-    if (!*powered) return;
-    pc_board_audio_power(true, false); /* mute AW8737A PA first to avoid pop */
-    pc_board_codec_write(0x32, 0x00);
-    pc_board_codec_write(0x00, 0x1f);
-    i2s_channel_disable(tx_chan);
+    if (*powered) {
+        pc_board_audio_power(true, false); /* mute AW8737A PA first to avoid pop */
+        delay_ms(10);
+        pc_board_codec_write(0x32, 0x00);
+        pc_board_codec_write(0x00, 0x1f);
+    }
+    if (*i2s_on) {
+        i2s_channel_disable(tx_chan);
+        *i2s_on = false;
+    }
     pc_board_audio_power(false, false);
     *powered = false;
 }
@@ -314,7 +354,7 @@ static void power_off_hw(bool *powered)
 static void audio_task(void *arg)
 {
     (void)arg;
-    bool powered = false;
+    bool powered = false, i2s_on = false;
     int64_t idle_since = 0;
     const size_t max_pcm = PC_AUDIO_SAMPLE_RATE * 12; /* up to 12 seconds in PSRAM */
     int16_t *pcm = heap_caps_malloc(max_pcm * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -326,7 +366,7 @@ static void audio_task(void *arg)
     }
     for (;;) {
         if (shutting_down) {
-            power_off_hw(&powered);
+            power_off_hw(&powered, &i2s_on);
             playing = false;
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -342,9 +382,9 @@ static void audio_task(void *arg)
 
         if (g == done_gen) {
             playing = false;
-            /* Keep amplifier warm for 800 ms so rapid A/B key clicks have zero turn-on latency. */
-            if (powered && esp_timer_get_time() - idle_since > 800000) power_off_hw(&powered);
-            vTaskDelay(pdMS_TO_TICKS(15));
+            /* Keep amplifier warm for 2.5 s so key clicks and 800 ms debounced page melodies don't cycle power. */
+            if (powered && esp_timer_get_time() - idle_since > 2500000) power_off_hw(&powered, &i2s_on);
+            vTaskDelay(pdMS_TO_TICKS(10) ? pdMS_TO_TICKS(10) : 1);
             continue;
         }
         done_gen = g;
@@ -353,24 +393,31 @@ static void audio_task(void *arg)
             continue;
         }
         playing = true;
+        if (!powered) {
+            /* Turn on CODEC_3V3_L3B (G45) and let the 10 uF rail + I2C hot-plug switch settle while rendering. */
+            pc_board_audio_power(true, false);
+            delay_ms(30);
+        }
         size_t samples = pc_synth_render(id, vol, pcm, max_pcm);
         if (!samples) {
             playing = false;
             continue;
         }
         if (!powered) {
-            pc_board_audio_power(true, false);
-            vTaskDelay(pdMS_TO_TICKS(15));
-            if (i2s_channel_enable(tx_chan) != ESP_OK || es8311_setup() != ESP_OK) {
+            if (!i2s_on && i2s_channel_enable(tx_chan) == ESP_OK) i2s_on = true;
+            if (!i2s_on || es8311_setup() != ESP_OK) {
                 ESP_LOGW(TAG, "ES8311 / I2S init failed");
-                pc_board_audio_power(false, false);
+                power_off_hw(&powered, &i2s_on);
                 playing = false;
                 continue;
             }
             memset(stereo, 0, sizeof(stereo));
             size_t written = 0;
-            i2s_channel_write(tx_chan, stereo, sizeof(stereo), &written, 50);
+            i2s_channel_write(tx_chan, stereo, sizeof(stereo), &written, 100);
             pc_board_audio_power(true, true);
+            /* Pre-fill ~48 ms of silence so ES8311 VMID/DACVREF and AW8737A soft-start finish before note attack. */
+            for (int w = 0; w < 3; w++)
+                i2s_channel_write(tx_chan, stereo, sizeof(stereo), &written, 100);
             powered = true;
         }
         size_t offset = 0;
@@ -385,12 +432,14 @@ static void audio_task(void *arg)
             i2s_channel_write(tx_chan, stereo, chunk * 2 * sizeof(int16_t), &written, 100);
             offset += chunk;
         }
-        /* Flush trailing silence so DMA never loops the last waveform sample. */
+        /* Flush trailing silence (>= 96 ms > 90 ms DMA ring) so DMA fully drains to the speaker before returning. */
         memset(stereo, 0, sizeof(stereo));
         size_t written = 0;
-        i2s_channel_write(tx_chan, stereo, sizeof(stereo), &written, 50);
+        int flush_chunks = (req_gen == g && !shutting_down) ? 6 : 1;
+        for (int w = 0; w < flush_chunks; w++)
+            i2s_channel_write(tx_chan, stereo, sizeof(stereo), &written, 100);
         idle_since = esp_timer_get_time();
-        playing = false;
+        if (req_gen == g) playing = false;
     }
 }
 
@@ -455,12 +504,12 @@ bool pc_audio_busy(void)
 void pc_audio_shutdown(void)
 {
     if (!tx_chan) return;
-    /* Wait briefly for an in-flight key click or chime to finish before cutting power. */
-    int64_t deadline = esp_timer_get_time() + 3500000;
+    /* Wait for an in-flight key click, chime or anniversary melody to finish before cutting power. */
+    int64_t deadline = esp_timer_get_time() + 15000000;
     while (pc_audio_busy() && esp_timer_get_time() < deadline) vTaskDelay(pdMS_TO_TICKS(20));
     shutting_down = true;
     pc_audio_stop();
-    vTaskDelay(pdMS_TO_TICKS(40));
+    delay_ms(40);
     pc_board_audio_power(false, false);
 }
 void pc_audio_resume(void)

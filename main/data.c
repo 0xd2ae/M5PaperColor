@@ -134,6 +134,102 @@ static void optional_text(const cJSON *object,const char *key,char *out,size_t c
 {
     if (!text(object,key,out,cap)) out[0]=0;
 }
+int pc_config_wifi_find(const pc_config_t *c,const char *ssid)
+{
+    if (!c || !ssid || !ssid[0]) return -1;
+    for (int i=0;i<c->wifi_count && i<PC_WIFI_MAX;i++) {
+        if (!strcmp(c->wifis[i].ssid,ssid)) return i;
+    }
+    return -1;
+}
+void pc_config_sync_active_wifi(pc_config_t *c)
+{
+    if (!c) return;
+    if (c->wifi_count<0) c->wifi_count=0;
+    if (c->wifi_count>PC_WIFI_MAX) c->wifi_count=PC_WIFI_MAX;
+    if (!c->ssid[0]) {
+        if (c->wifi_count>0) pc_config_wifi_activate(c,c->wifis[0].ssid);
+        return;
+    }
+    int idx=pc_config_wifi_find(c,c->ssid);
+    if (idx>=0) {
+        pc_wifi_profile_t *p=&c->wifis[idx];
+        if (c->password[0]) strcpy(p->password,c->password);
+        else if (p->password[0]) strcpy(c->password,p->password);
+        if (c->city[0]) {
+            strcpy(p->city,c->city); strcpy(p->location,c->location);
+            p->latitude=c->latitude; p->longitude=c->longitude; p->coordinates=c->coordinates;
+        } else if (p->city[0]) {
+            strcpy(c->city,p->city); strcpy(c->location,p->location);
+            c->latitude=p->latitude; c->longitude=p->longitude; c->coordinates=p->coordinates;
+        }
+        return;
+    }
+    if (c->wifi_count<PC_WIFI_MAX) {
+        for (int i=c->wifi_count;i>0;i--) c->wifis[i]=c->wifis[i-1];
+        c->wifi_count++;
+    } else {
+        for (int i=PC_WIFI_MAX-1;i>0;i--) c->wifis[i]=c->wifis[i-1];
+    }
+    pc_wifi_profile_t *p=&c->wifis[0];
+    *p=(pc_wifi_profile_t){0};
+    strcpy(p->ssid,c->ssid); strcpy(p->password,c->password);
+    strcpy(p->city,c->city); strcpy(p->location,c->location);
+    p->latitude=c->latitude; p->longitude=c->longitude; p->coordinates=c->coordinates;
+}
+bool pc_config_wifi_upsert(pc_config_t *c,const pc_wifi_profile_t *profile,bool make_active)
+{
+    if (!c || !profile || !profile->ssid[0] || strlen(profile->ssid)>=sizeof(profile->ssid)) return false;
+    size_t pw=strlen(profile->password);
+    if (pw && (pw<8 || pw>63)) return false;
+    pc_wifi_profile_t item=*profile;
+    if (!item.coordinates || !pc_location_valid(item.location) || !isfinite(item.latitude) || !isfinite(item.longitude) ||
+        item.latitude<-90 || item.latitude>90 || item.longitude<-180 || item.longitude>180) {
+        item.coordinates=false; item.latitude=0; item.longitude=0;
+    }
+    int idx=pc_config_wifi_find(c,item.ssid);
+    if (idx>=0) {
+        c->wifis[idx]=item;
+    } else {
+        if (c->wifi_count>=PC_WIFI_MAX) return false;
+        idx=c->wifi_count++;
+        c->wifis[idx]=item;
+    }
+    if (make_active || !c->ssid[0] || !strcmp(c->ssid,item.ssid)) {
+        strcpy(c->ssid,item.ssid); strcpy(c->password,item.password);
+        if (item.city[0]) {
+            strcpy(c->city,item.city); strcpy(c->location,item.location);
+            c->latitude=item.latitude; c->longitude=item.longitude; c->coordinates=item.coordinates;
+        }
+    }
+    return true;
+}
+bool pc_config_wifi_activate(pc_config_t *c,const char *ssid)
+{
+    int idx=pc_config_wifi_find(c,ssid);
+    if (idx<0) return false;
+    const pc_wifi_profile_t *p=&c->wifis[idx];
+    strcpy(c->ssid,p->ssid); strcpy(c->password,p->password);
+    if (p->city[0]) {
+        strcpy(c->city,p->city); strcpy(c->location,p->location);
+        c->latitude=p->latitude; c->longitude=p->longitude; c->coordinates=p->coordinates;
+    }
+    return true;
+}
+bool pc_config_wifi_remove(pc_config_t *c,const char *ssid)
+{
+    int idx=pc_config_wifi_find(c,ssid);
+    if (idx<0) return false;
+    bool was_active=!strcmp(c->ssid,ssid);
+    for (int i=idx;i+1<c->wifi_count;i++) c->wifis[i]=c->wifis[i+1];
+    c->wifi_count--;
+    if (c->wifi_count>=0 && c->wifi_count<PC_WIFI_MAX) memset(&c->wifis[c->wifi_count],0,sizeof(c->wifis[0]));
+    if (was_active) {
+        if (c->wifi_count>0) pc_config_wifi_activate(c,c->wifis[0].ssid);
+        else { c->ssid[0]=0; c->password[0]=0; }
+    }
+    return true;
+}
 bool pc_config_from_json(const char *json,pc_config_t *out)
 {
     cJSON *root=cJSON_Parse(json);
@@ -144,6 +240,7 @@ bool pc_config_from_json(const char *json,pc_config_t *out)
     const cJSON *weather=cJSON_GetObjectItemCaseSensitive(root,"qweather");
     const cJSON *city=cJSON_GetObjectItemCaseSensitive(root,"city");
     const cJSON *audio=cJSON_GetObjectItemCaseSensitive(root,"audio");
+    const cJSON *wifis=cJSON_GetObjectItemCaseSensitive(root,"wifis");
     optional_text(wifi,"ssid",c.ssid,sizeof(c.ssid)); optional_text(wifi,"password",c.password,sizeof(c.password));
     optional_text(weather,"host",c.host,sizeof(c.host)); optional_text(weather,"api_key",c.api_key,sizeof(c.api_key));
     optional_text(city,"name",c.city,sizeof(c.city)); optional_text(city,"location",c.location,sizeof(c.location));
@@ -151,6 +248,24 @@ bool pc_config_from_json(const char *json,pc_config_t *out)
     if (cJSON_IsNumber(lat) && cJSON_IsNumber(lon) && pc_location_valid(c.location)) {
         c.latitude=lat->valuedouble; c.longitude=lon->valuedouble; c.coordinates=true;
     }
+    if (cJSON_IsArray(wifis)) {
+        const cJSON *item;
+        cJSON_ArrayForEach(item,wifis) {
+            if (!cJSON_IsObject(item) || c.wifi_count>=PC_WIFI_MAX) continue;
+            pc_wifi_profile_t p={0};
+            optional_text(item,"ssid",p.ssid,sizeof(p.ssid));
+            optional_text(item,"password",p.password,sizeof(p.password));
+            optional_text(item,"city",p.city,sizeof(p.city));
+            optional_text(item,"location",p.location,sizeof(p.location));
+            const cJSON *wlat=cJSON_GetObjectItemCaseSensitive(item,"latitude");
+            const cJSON *wlon=cJSON_GetObjectItemCaseSensitive(item,"longitude");
+            if (cJSON_IsNumber(wlat) && cJSON_IsNumber(wlon) && pc_location_valid(p.location)) {
+                p.latitude=wlat->valuedouble; p.longitude=wlon->valuedouble; p.coordinates=true;
+            }
+            if (p.ssid[0]) pc_config_wifi_upsert(&c,&p,false);
+        }
+    }
+    pc_config_sync_active_wifi(&c);
     if (cJSON_IsObject(audio)) {
         const cJSON *vol=cJSON_GetObjectItemCaseSensitive(audio,"volume");
         const cJSON *cs=cJSON_GetObjectItemCaseSensitive(audio,"chime_start");
@@ -169,18 +284,36 @@ bool pc_config_from_json(const char *json,pc_config_t *out)
     cJSON_Delete(root);
     *out=c; return true;
 }
-char *pc_config_to_json(const pc_config_t *c)
+char *pc_config_to_json(const pc_config_t *in)
 {
+    pc_config_t local=*in;
+    pc_config_sync_active_wifi(&local);
+    const pc_config_t *c=&local;
     cJSON *root=cJSON_CreateObject(),*wifi=cJSON_AddObjectToObject(root,"wifi");
     cJSON *weather=cJSON_AddObjectToObject(root,"qweather"),*city=cJSON_AddObjectToObject(root,"city");
-    cJSON *audio=cJSON_AddObjectToObject(root,"audio");
-    if (!city || !audio) { cJSON_Delete(root); return NULL; }
+    cJSON *audio=cJSON_AddObjectToObject(root,"audio"),*wifis=cJSON_AddArrayToObject(root,"wifis");
+    if (!city || !audio || !wifis) { cJSON_Delete(root); return NULL; }
     cJSON_AddNumberToObject(root,"version",1);
     cJSON_AddStringToObject(wifi,"ssid",c->ssid); cJSON_AddStringToObject(wifi,"password",c->password);
     cJSON_AddStringToObject(weather,"host",c->host); cJSON_AddStringToObject(weather,"api_key",c->api_key);
     cJSON_AddStringToObject(city,"name",c->city); cJSON_AddStringToObject(city,"location",c->location);
     if (c->coordinates) {
         cJSON_AddNumberToObject(city,"latitude",c->latitude); cJSON_AddNumberToObject(city,"longitude",c->longitude);
+    }
+    for (int i=0;i<c->wifi_count && i<PC_WIFI_MAX;i++) {
+        const pc_wifi_profile_t *p=&c->wifis[i];
+        if (!p->ssid[0]) continue;
+        cJSON *w=cJSON_CreateObject();
+        if (!w) continue;
+        cJSON_AddStringToObject(w,"ssid",p->ssid);
+        cJSON_AddStringToObject(w,"password",p->password);
+        cJSON_AddStringToObject(w,"city",p->city);
+        cJSON_AddStringToObject(w,"location",p->location);
+        if (p->coordinates) {
+            cJSON_AddNumberToObject(w,"latitude",p->latitude);
+            cJSON_AddNumberToObject(w,"longitude",p->longitude);
+        }
+        cJSON_AddItemToArray(wifis,w);
     }
     pc_audio_config_t a=c->audio;
     if (a.volume<10 || a.volume>100) a.volume=60;
@@ -210,7 +343,9 @@ bool pc_city_parse(const char *body,pc_config_t *config)
         double a=strtod(lat,&end); if (*end) continue;
         double b=strtod(lon,&end); if (*end) continue;
         strcpy(config->location,id); strcpy(config->city,name);
-        config->latitude=a; config->longitude=b; config->coordinates=true; ok=true; break;
+        config->latitude=a; config->longitude=b; config->coordinates=true;
+        pc_config_sync_active_wifi(config);
+        ok=true; break;
     }
     cJSON_Delete(root); return ok;
 }

@@ -108,6 +108,7 @@ static esp_err_t send_json(httpd_req_t *req,cJSON *root);
 static esp_err_t status_get(httpd_req_t *req)
 {
     touch();
+    pc_config_sync_active_wifi(active);
     cJSON *root=cJSON_CreateObject();
     if (!root) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(root,"ssid",active->ssid);
@@ -115,6 +116,20 @@ static esp_err_t status_get(httpd_req_t *req)
     cJSON_AddStringToObject(root,"location",active->location);
     cJSON_AddBoolToObject(root,"has_key",active->api_key[0]); cJSON_AddBoolToObject(root,"has_password",active->password[0]);
     cJSON_AddBoolToObject(root,"card",pc_storage_card());
+    cJSON *wifis=cJSON_AddArrayToObject(root,"wifis");
+    for (int i=0;wifis && i<active->wifi_count && i<PC_WIFI_MAX;i++) {
+        const pc_wifi_profile_t *p=&active->wifis[i];
+        if (!p->ssid[0]) continue;
+        cJSON *w=cJSON_CreateObject();
+        if (!w) continue;
+        cJSON_AddStringToObject(w,"ssid",p->ssid);
+        cJSON_AddBoolToObject(w,"has_password",p->password[0]!=0);
+        cJSON_AddStringToObject(w,"city",p->city);
+        cJSON_AddStringToObject(w,"location",p->location);
+        cJSON_AddBoolToObject(w,"coordinates",p->coordinates);
+        cJSON_AddBoolToObject(w,"active",!strcmp(p->ssid,active->ssid));
+        cJSON_AddItemToArray(wifis,w);
+    }
     pc_device_status_t st; pc_device_status(&st);
     cJSON_AddBoolToObject(root,"time_valid",st.time_valid);
     cJSON_AddNumberToObject(root,"now",(double)time(NULL));
@@ -144,15 +159,45 @@ static esp_err_t status_get(httpd_req_t *req)
     }
     return send_json(req,root);
 }
+static esp_err_t wifi_scan_get(httpd_req_t *req)
+{
+    touch();
+    pc_wifi_ap_t aps[24];
+    int count=pc_wifi_scan(aps,24);
+    cJSON *root=cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,"ok",true);
+    cJSON *arr=cJSON_AddArrayToObject(root,"aps");
+    for (int i=0;arr && i<count;i++) {
+        cJSON *item=cJSON_CreateObject();
+        if (!item) continue;
+        cJSON_AddStringToObject(item,"ssid",aps[i].ssid);
+        cJSON_AddNumberToObject(item,"rssi",aps[i].rssi);
+        cJSON_AddBoolToObject(item,"auth",aps[i].auth);
+        int idx=pc_config_wifi_find(active,aps[i].ssid);
+        cJSON_AddBoolToObject(item,"saved",idx>=0);
+        cJSON_AddStringToObject(item,"city",idx>=0?active->wifis[idx].city:"");
+        cJSON_AddItemToArray(arr,item);
+    }
+    return send_json(req,root);
+}
 static esp_err_t connect_post(httpd_req_t *req)
 {
     touch();
     cJSON *root=request_json(req); pc_config_t candidate=draft;
     char password[65]; bool ok=field(root,"ssid",candidate.ssid,sizeof(candidate.ssid)) && candidate.ssid[0] && field(root,"password",password,sizeof(password));
+    int saved_idx=ok?pc_config_wifi_find(active,candidate.ssid):-1;
     if (ok) {
         if (password[0]) strcpy(candidate.password,password);
+        else if (saved_idx>=0) strcpy(candidate.password,active->wifis[saved_idx].password);
         else if (!strcmp(candidate.ssid,active->ssid)) strcpy(candidate.password,active->password);
         else candidate.password[0]=0;
+        if (saved_idx>=0 && active->wifis[saved_idx].city[0]) {
+            strcpy(candidate.city,active->wifis[saved_idx].city);
+            strcpy(candidate.location,active->wifis[saved_idx].location);
+            candidate.latitude=active->wifis[saved_idx].latitude;
+            candidate.longitude=active->wifis[saved_idx].longitude;
+            candidate.coordinates=active->wifis[saved_idx].coordinates;
+        }
         size_t n=strlen(candidate.password); ok=!n || (n>=8 && n<=63);
     }
     cJSON_Delete(root);
@@ -162,7 +207,7 @@ static esp_err_t connect_post(httpd_req_t *req)
         draft=candidate;
         if (pc_sync_time(esp_timer_get_time()+10000000)) { /* app persists RTC after mode exits */ }
     }
-    return reply(req,err==ESP_OK,err==ESP_OK?"Wi-Fi 已连接，可以搜索城市":"连接失败，请检查 Wi-Fi；原配置未修改");
+    return reply(req,err==ESP_OK,err==ESP_OK?"Wi-Fi 已连接，可以搜索并绑定该 Wi-Fi 对应的城市":"连接失败，请检查 Wi-Fi；原配置未修改");
 }
 static bool url_encode(const char *input,char *out,size_t capacity)
 {
@@ -193,39 +238,101 @@ static esp_err_t city_post(httpd_req_t *req)
     httpd_resp_set_type(req,"application/json; charset=utf-8");
     err=httpd_resp_send(req,body,HTTPD_RESP_USE_STRLEN); free(body); return err;
 }
+static bool resolve_saved_location(const pc_config_t *cfg,const char *id,pc_wifi_profile_t *out)
+{
+    if (!id || !id[0]) return false;
+    if (!strcmp(id,cfg->location) && cfg->coordinates && cfg->city[0]) {
+        strcpy(out->city,cfg->city); strcpy(out->location,cfg->location);
+        out->latitude=cfg->latitude; out->longitude=cfg->longitude; out->coordinates=true;
+        return true;
+    }
+    for (int i=0;i<cfg->wifi_count && i<PC_WIFI_MAX;i++) {
+        const pc_wifi_profile_t *p=&cfg->wifis[i];
+        if (!strcmp(id,p->location) && p->coordinates && p->city[0]) {
+            strcpy(out->city,p->city); strcpy(out->location,p->location);
+            out->latitude=p->latitude; out->longitude=p->longitude; out->coordinates=true;
+            return true;
+        }
+    }
+    return false;
+}
 static esp_err_t save_post(httpd_req_t *req)
 {
     touch();
     cJSON *root=request_json(req); pc_config_t candidate=draft;
-    char id[33]; bool ok=api_fields(root,&candidate) && field(root,"location",id,sizeof(id));
+    candidate.wifi_count=active->wifi_count;
+    memcpy(candidate.wifis,active->wifis,sizeof(candidate.wifis));
+    char id[33],req_ssid[33]="",req_pw[65]="";
+    bool stay=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root,"stay"));
+    bool has_req_ssid=field(root,"ssid",req_ssid,sizeof(req_ssid)) && req_ssid[0];
+    bool has_req_pw=field(root,"password",req_pw,sizeof(req_pw));
+    bool ok=api_fields(root,&candidate) && field(root,"location",id,sizeof(id));
     cJSON_Delete(root);
     if (!ok) return reply(req,false,"配置格式错误");
-    if (strcmp(id,active->location) || !active->coordinates || candidates) {
-        const cJSON *choice=NULL,*item;
+    pc_wifi_profile_t prof={0};
+    strcpy(prof.ssid,has_req_ssid?req_ssid:candidate.ssid);
+    if (!prof.ssid[0]) strcpy(prof.ssid,active->ssid);
+    int saved_idx=pc_config_wifi_find(active,prof.ssid);
+    if (has_req_pw && req_pw[0]) strcpy(prof.password,req_pw);
+    else if (saved_idx>=0) strcpy(prof.password,active->wifis[saved_idx].password);
+    else if (!strcmp(prof.ssid,draft.ssid)) strcpy(prof.password,draft.password);
+    else if (!strcmp(prof.ssid,active->ssid)) strcpy(prof.password,active->password);
+    size_t pwn=strlen(prof.password);
+    if (!prof.ssid[0] || (pwn && (pwn<8 || pwn>63))) return reply(req,false,"Wi-Fi 名称或密码格式错误");
+    const cJSON *choice=NULL,*item;
+    if (candidates) {
         cJSON_ArrayForEach(item,candidates) {
             const cJSON *value=cJSON_GetObjectItemCaseSensitive(item,"id");
             if (cJSON_IsString(value) && !strcmp(value->valuestring,id)) { choice=item; break; }
         }
-        char lat[32],lon[32],zone[48],name[97];
-        if (!choice || !field(choice,"lat",lat,sizeof(lat)) || !field(choice,"lon",lon,sizeof(lon)) ||
+    }
+    if (choice) {
+        char lat[32],lon[32],zone[48],name[97],*end;
+        if (!field(choice,"lat",lat,sizeof(lat)) || !field(choice,"lon",lon,sizeof(lon)) ||
             !field(choice,"name",name,sizeof(name)) || !field(choice,"tz",zone,sizeof(zone)) || strcmp(zone,"Asia/Shanghai"))
             return reply(req,false,"请从查询结果中选择中国大陆城市");
-        char *end; candidate.latitude=strtod(lat,&end); if (*end) return reply(req,false,"纬度格式错误");
-        candidate.longitude=strtod(lon,&end); if (*end) return reply(req,false,"经度格式错误");
-        strcpy(candidate.city,name); strcpy(candidate.location,id); candidate.coordinates=true;
-    } else {
-        strcpy(candidate.city,active->city); strcpy(candidate.location,active->location);
-        candidate.latitude=active->latitude; candidate.longitude=active->longitude; candidate.coordinates=active->coordinates;
+        prof.latitude=strtod(lat,&end); if (*end) return reply(req,false,"纬度格式错误");
+        prof.longitude=strtod(lon,&end); if (*end) return reply(req,false,"经度格式错误");
+        strcpy(prof.city,name); strcpy(prof.location,id); prof.coordinates=true;
+    } else if (!resolve_saved_location(active,id,&prof) && !resolve_saved_location(&draft,id,&prof)) {
+        return reply(req,false,"请先搜索并选择中国大陆城市");
     }
-    if (!pc_config_valid(&candidate)) return reply(req,false,"配置不完整，请连接 Wi-Fi 并选择城市");
+    bool make_active=!stay || !active->ssid[0] || !strcmp(prof.ssid,draft.ssid) || !strcmp(prof.ssid,active->ssid);
+    if (!pc_config_wifi_upsert(&candidate,&prof,make_active))
+        return reply(req,false,"已保存的 Wi-Fi 数量已达上限（最多 8 个）");
+    pc_config_t verify_cfg=candidate;
+    strcpy(verify_cfg.city,prof.city); strcpy(verify_cfg.location,prof.location);
+    verify_cfg.latitude=prof.latitude; verify_cfg.longitude=prof.longitude; verify_cfg.coordinates=true;
+    if (!pc_config_valid(&verify_cfg)) return reply(req,false,"配置不完整，请连接 Wi-Fi 并选择城市");
     if (!pc_storage_card()) return reply(req,false,NO_CARD);
     pc_weather_t weather={0};
-    if (pc_weather_fetch(&candidate,&weather,esp_timer_get_time()+25000000)!=ESP_OK)
-        return reply(req,false,"天气接口验证失败，原配置未修改");
+    if (pc_weather_fetch(&verify_cfg,&weather,esp_timer_get_time()+25000000)!=ESP_OK)
+        return reply(req,false,"天气接口验证失败，请确认当前已连接可用 Wi-Fi 且凭据正确");
     if (pc_config_save(&candidate)!=ESP_OK) return reply(req,false,"保存失败，原配置未修改");
-    *active=candidate; pc_weather_save(&weather);
+    *active=candidate; draft=candidate;
+    if (make_active) pc_weather_save(&weather);
+    if (stay) {
+        char msg[256];
+        snprintf(msg,sizeof(msg),"已保存 Wi-Fi「%s」并绑定地区「%s」，可继续添加其他 Wi-Fi",prof.ssid,prof.city);
+        return reply(req,true,msg);
+    }
     esp_err_t err=reply(req,true,"已保存，即将退出配置并更新屏幕");
     atomic_store(&finished,esp_timer_get_time()); return err;
+}
+static esp_err_t wifi_delete_post(httpd_req_t *req)
+{
+    touch();
+    if (!pc_storage_card()) return reply(req,false,NO_CARD);
+    cJSON *root=request_json(req); char ssid[33]="";
+    bool ok=field(root,"ssid",ssid,sizeof(ssid)) && ssid[0];
+    cJSON_Delete(root);
+    if (!ok) return reply(req,false,"Wi-Fi 名称无效");
+    pc_config_t candidate=*active;
+    pc_config_sync_active_wifi(&candidate);
+    if (!pc_config_wifi_remove(&candidate,ssid)) return reply(req,false,"未找到该 Wi-Fi 配置");
+    if (pc_config_save(&candidate)!=ESP_OK) return reply(req,false,"保存失败，原配置未修改");
+    *active=candidate; draft=candidate;
+    return reply(req,true,"已删除该 Wi-Fi 配置");
 }
 static esp_err_t holidays_post(httpd_req_t *req)
 {
@@ -248,7 +355,6 @@ static esp_err_t exit_post(httpd_req_t *req)
 static esp_err_t audio_post(httpd_req_t *req)
 {
     touch();
-    if (!pc_storage_card()) return reply(req,false,NO_CARD);
     cJSON *root=request_json(req);
     pc_audio_config_t a=active->audio;
     const cJSON *vol=cJSON_GetObjectItemCaseSensitive(root,"volume");
@@ -268,6 +374,10 @@ static esp_err_t audio_post(httpd_req_t *req)
     }
     cJSON_Delete(root);
     if (!ok) return reply(req,false,"声音设置参数无效");
+    if (!pc_storage_card()) {
+        active->audio=a; draft.audio=a;
+        return reply(req,true,"声音设置已在当前运行生效（未插 TF 卡，重启后不保留）");
+    }
     pc_config_t candidate=*active; candidate.audio=a;
     if (pc_config_save(&candidate)!=ESP_OK) return reply(req,false,"保存失败，原设置未修改");
     active->audio=a; draft.audio=a;
@@ -543,6 +653,8 @@ esp_err_t pc_setup_start(pc_config_t *config)
     const httpd_uri_t routes[]={
         {.uri="/",.method=HTTP_GET,.handler=index_get}, {.uri="/app.js",.method=HTTP_GET,.handler=app_get},
         {.uri="/e6.wasm",.method=HTTP_GET,.handler=wasm_get}, {.uri="/api/status",.method=HTTP_GET,.handler=status_get},
+        {.uri="/api/wifi/scan",.method=HTTP_GET,.handler=wifi_scan_get},
+        {.uri="/api/wifi/delete",.method=HTTP_POST,.handler=wifi_delete_post},
         {.uri="/api/connect",.method=HTTP_POST,.handler=connect_post}, {.uri="/api/cities",.method=HTTP_POST,.handler=city_post},
         {.uri="/api/save",.method=HTTP_POST,.handler=save_post}, {.uri="/api/holidays",.method=HTTP_POST,.handler=holidays_post},
         {.uri="/api/audio",.method=HTTP_POST,.handler=audio_post}, {.uri="/api/audio/test",.method=HTTP_POST,.handler=audio_test_post},

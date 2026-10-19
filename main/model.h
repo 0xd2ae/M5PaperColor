@@ -20,12 +20,21 @@ typedef struct {
     int chime_start, chime_end; /* 0..23, default 8..21 */
     char anniv[20];       /* "off" (default) or melody id */
 } pc_audio_config_t;
+#define PC_WIFI_MAX 8
+typedef struct {
+    char ssid[33], password[65];
+    char city[97], location[33];
+    double latitude, longitude;
+    bool coordinates;
+} pc_wifi_profile_t;
 typedef struct {
     char ssid[33], password[65], host[128], api_key[129];
     char city[97], location[33];
     double latitude, longitude;
     bool coordinates;
     pc_audio_config_t audio;
+    int wifi_count;
+    pc_wifi_profile_t wifis[PC_WIFI_MAX];
 } pc_config_t;
 typedef struct { char date[11], text[64]; int icon, low, high; } pc_forecast_t;
 typedef struct {
@@ -67,6 +76,11 @@ bool pc_melody_valid(const char *id);
 bool pc_config_valid(const pc_config_t *config);
 /* Wi-Fi and API set and a city name, but no Location ID/coordinates yet (hand-written config.json). */
 bool pc_config_resolvable(const pc_config_t *config);
+int pc_config_wifi_find(const pc_config_t *config, const char *ssid);
+void pc_config_sync_active_wifi(pc_config_t *config);
+bool pc_config_wifi_upsert(pc_config_t *config, const pc_wifi_profile_t *profile, bool make_active);
+bool pc_config_wifi_activate(pc_config_t *config, const char *ssid);
+bool pc_config_wifi_remove(pc_config_t *config, const char *ssid);
 bool pc_config_from_json(const char *json, pc_config_t *out);
 char *pc_config_to_json(const pc_config_t *config);
 /* First mainland-China match of a GeoAPI city lookup response. */

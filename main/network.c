@@ -39,12 +39,66 @@ static int remaining(int64_t deadline)
     int64_t ms=(deadline-esp_timer_get_time())/1000;
     return ms<=0 ? 0 : ms>10000 ? 10000 : (int)ms;
 }
-esp_err_t pc_wifi_connect(const pc_config_t *c,int64_t deadline)
+int pc_wifi_scan(pc_wifi_ap_t *out,int max_count)
 {
+    if (!out || max_count<=0) return 0;
+    wifi_mode_t mode=WIFI_MODE_NULL;
+    esp_wifi_get_mode(&mode);
+    if (mode!=WIFI_MODE_APSTA && mode!=WIFI_MODE_STA) {
+        if (esp_wifi_set_mode(WIFI_MODE_STA)!=ESP_OK) return 0;
+    }
+    if (!started) {
+        if (esp_wifi_start()!=ESP_OK) return 0;
+        started=true;
+    }
+    if (!(xEventGroupGetBits(events)&1)) esp_wifi_disconnect();
+    wifi_scan_config_t cfg={
+        .show_hidden=false,
+        .scan_type=WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active.min=45,
+        .scan_time.active.max=110,
+    };
+    if (esp_wifi_scan_start(&cfg,true)!=ESP_OK) return 0;
+    uint16_t num=32;
+    wifi_ap_record_t *recs=calloc(num,sizeof(*recs));
+    if (!recs) { esp_wifi_clear_ap_list(); return 0; }
+    if (esp_wifi_scan_get_ap_records(&num,recs)!=ESP_OK) { free(recs); return 0; }
+    int count=0;
+    for (uint16_t i=0;i<num;i++) {
+        const char *ssid=(const char *)recs[i].ssid;
+        if (!ssid[0] || !strcmp(ssid,"PaperColor-Setup")) continue;
+        int found=-1;
+        for (int j=0;j<count;j++) {
+            if (!strcmp(out[j].ssid,ssid)) { found=j; break; }
+        }
+        bool auth=recs[i].authmode!=WIFI_AUTH_OPEN;
+        if (found>=0) {
+            if (recs[i].rssi>out[found].rssi) { out[found].rssi=recs[i].rssi; out[found].auth=auth; }
+        } else if (count<max_count) {
+            snprintf(out[count].ssid,sizeof(out[count].ssid),"%s",ssid);
+            out[count].rssi=recs[i].rssi;
+            out[count].auth=auth;
+            count++;
+        }
+    }
+    free(recs);
+    for (int i=0;i<count;i++) {
+        for (int j=i+1;j<count;j++) {
+            if (out[j].rssi>out[i].rssi) {
+                pc_wifi_ap_t tmp=out[i]; out[i]=out[j]; out[j]=tmp;
+            }
+        }
+    }
+    return count;
+}
+static esp_err_t connect_single(const char *ssid,const char *password,int64_t deadline)
+{
+    if (!ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
     if (started) { esp_wifi_disconnect(); xEventGroupClearBits(events,1); }
     wifi_config_t wifi={0};
-    memcpy(wifi.sta.ssid,c->ssid,strlen(c->ssid)); memcpy(wifi.sta.password,c->password,strlen(c->password));
-    wifi.sta.threshold.authmode=c->password[0]?WIFI_AUTH_WPA2_PSK:WIFI_AUTH_OPEN;
+    memcpy(wifi.sta.ssid,ssid,strlen(ssid));
+    if (password && password[0]) memcpy(wifi.sta.password,password,strlen(password));
+    wifi.sta.threshold.authmode=(password && password[0])?WIFI_AUTH_WPA2_PSK:WIFI_AUTH_OPEN;
     wifi_mode_t mode=WIFI_MODE_NULL;
     esp_wifi_get_mode(&mode);
     esp_err_t err=esp_wifi_set_mode(mode==WIFI_MODE_APSTA?WIFI_MODE_APSTA:WIFI_MODE_STA); if (err!=ESP_OK) return err;
@@ -53,6 +107,39 @@ esp_err_t pc_wifi_connect(const pc_config_t *c,int64_t deadline)
     err=esp_wifi_connect(); if (err!=ESP_OK) return err;
     while (remaining(deadline)) {
         if (xEventGroupWaitBits(events,1,pdFALSE,pdFALSE,pdMS_TO_TICKS(250))&1) return ESP_OK;
+    }
+    return ESP_ERR_TIMEOUT;
+}
+esp_err_t pc_wifi_connect(pc_config_t *c,int64_t deadline)
+{
+    wifi_mode_t mode=WIFI_MODE_NULL;
+    esp_wifi_get_mode(&mode);
+    /* In APSTA setup mode or when only a single network is configured, connect directly to c->ssid. */
+    if (mode==WIFI_MODE_APSTA || c->wifi_count<=1) return connect_single(c->ssid,c->password,deadline);
+    pc_wifi_ap_t aps[24];
+    int n_aps=pc_wifi_scan(aps,24);
+    int order[PC_WIFI_MAX],n_order=0;
+    bool queued[PC_WIFI_MAX]={0};
+    /* First try saved networks visible in the scan, strongest signal first. */
+    for (int a=0;a<n_aps;a++) {
+        int idx=pc_config_wifi_find(c,aps[a].ssid);
+        if (idx>=0 && !queued[idx]) { order[n_order++]=idx; queued[idx]=true; }
+    }
+    /* Prefer the currently active network next (handles hidden SSIDs), then any remaining saved profiles. */
+    int active_idx=pc_config_wifi_find(c,c->ssid);
+    if (active_idx>=0 && !queued[active_idx]) { order[n_order++]=active_idx; queued[active_idx]=true; }
+    for (int i=0;i<c->wifi_count && i<PC_WIFI_MAX;i++) {
+        if (!queued[i] && c->wifis[i].ssid[0]) { order[n_order++]=i; queued[i]=true; }
+    }
+    for (int k=0;k<n_order && remaining(deadline)>0;k++) {
+        int idx=order[k];
+        int64_t now=esp_timer_get_time();
+        int64_t try_deadline=now+12000000;
+        if (try_deadline>deadline || k==n_order-1) try_deadline=deadline;
+        if (connect_single(c->wifis[idx].ssid,c->wifis[idx].password,try_deadline)==ESP_OK) {
+            pc_config_wifi_activate(c,c->wifis[idx].ssid);
+            return ESP_OK;
+        }
     }
     return ESP_ERR_TIMEOUT;
 }

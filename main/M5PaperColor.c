@@ -30,7 +30,8 @@ static RTC_DATA_ATTR int64_t browse_until;
 static RTC_DATA_ATTR bool last_offline;
 /* auto_page: the anniversary page was chosen because today is an anniversary, not by the user. */
 static RTC_DATA_ATTR int page,anniv_index,dismissed_day,last_chime_slot,last_anniv_sound_day;
-static RTC_DATA_ATTR bool auto_page;
+static RTC_DATA_ATTR bool auto_page,audio_retained;
+static RTC_DATA_ATTR pc_audio_config_t retained_audio;
 static const uint32_t MAGIC=0x50434331;
 static pc_config_t config;
 static pc_weather_t weather;
@@ -46,6 +47,7 @@ static int64_t last_refresh_attempt;
 static bool indoor_valid;
 static int indoor_temperature_x10,indoor_humidity;
 static int64_t indoor_read_at;
+static uint64_t wake_keys;
 
 static void enqueue(unsigned action)
 {
@@ -66,11 +68,16 @@ static void read_indoor(void)
 static void button_task(void *arg)
 {
     (void)arg; pc_buttons_t state={0};
+    static const int pins[3]={PC_KEY_A,PC_KEY_B,PC_KEY_C};
+    for (int i=0;i<3;i++) if (wake_keys&(1ULL<<pins[i])) {
+        if (!gpio_get_level(pins[i])) { state.raw[i]=true; state.stable[i]=true; state.pressed[i]=0; }
+        else enqueue(1u<<i);
+    }
     for (;;) {
         unsigned down=(!gpio_get_level(PC_KEY_A)) | ((!gpio_get_level(PC_KEY_B))<<1) | ((!gpio_get_level(PC_KEY_C))<<2);
         unsigned actions=pc_buttons_update(&state,down,esp_timer_get_time()/1000);
         if (actions) enqueue(actions);
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(10) ? pdMS_TO_TICKS(10) : 1);
     }
 }
 static bool current_date(pc_date_t *date)
@@ -224,7 +231,15 @@ static void update_weather(void)
     int64_t deadline=esp_timer_get_time()+60000000;
     offline=true;
     pc_led_state(PC_LED_NETWORK);
+    char prev_ssid[33],prev_loc[33];
+    snprintf(prev_ssid,sizeof(prev_ssid),"%s",config.ssid);
+    snprintf(prev_loc,sizeof(prev_loc),"%s",config.location);
     if (pc_wifi_connect(&config,deadline)==ESP_OK) {
+        if (strcmp(prev_ssid,config.ssid) || strcmp(prev_loc,config.location)) {
+            ESP_LOGI(TAG,"switched Wi-Fi to %s (%s)",config.ssid,config.city);
+            pc_weather_load(&weather,config.location);
+            if (card) pc_config_save(&config);
+        }
         if (pc_sync_time(deadline)) {
             esp_err_t err=pc_rtc_write(time(NULL));
             if (err!=ESP_OK) ESP_LOGW(TAG,"RTC sync failed: %s",esp_err_to_name(err));
@@ -287,7 +302,7 @@ static void auto_select(void)
         if (page!=PAGE_ANNIVERSARY || auto_page) { page=PAGE_ANNIVERSARY; anniv_index=i; auto_page=true; }
     } else if (auto_page) { page=PAGE_CALENDAR; auto_page=false; }
 }
-static void scheduled_chime(void)
+static void scheduled_chime(bool allow_hourly)
 {
     if (battery>=0 && battery<=10) return;
     time_t now=time(NULL); struct tm t; localtime_r(&now,&t);
@@ -298,12 +313,14 @@ static void scheduled_chime(void)
     if (page==PAGE_ANNIVERSARY && auto_page && last_anniv_sound_day!=day) {
         const char *m=anniv_melody(anniv_index);
         if (m && (t.tm_hour>=8 && t.tm_hour<=21)) {
+            int64_t wait_until=esp_timer_get_time()+1500000;
+            while (pc_audio_busy() && esp_timer_get_time()<wait_until) vTaskDelay(1);
             last_anniv_sound_day=day; last_chime_slot=slot;
             pc_audio_play(m,config.audio.volume);
             return;
         }
     }
-    if (allowed && t.tm_min<=2 && last_chime_slot!=slot) {
+    if (allow_hourly && allowed && t.tm_min<=2 && last_chime_slot!=slot) {
         last_chime_slot=slot;
         pc_audio_play(config.audio.chime,config.audio.volume);
     }
@@ -332,7 +349,8 @@ static void setup_mode(void)
     pc_setup_stop();
     pc_led_state(PC_LED_IDLE);
     lock_state();
-    pc_config_load(&config);
+    if (card) pc_config_load(&config);
+    retained_audio=config.audio; audio_retained=true;
     pc_weather_load(&weather,config.location);
     unlock_state();
     pc_preview_reload(PC_RELOAD_HOLIDAYS|PC_RELOAD_ANNIVERSARIES);
@@ -352,6 +370,7 @@ static bool ready_actions(pc_actions_t *actions)
 }
 static void sleep_until_next(void)
 {
+    retained_audio=config.audio; audio_retained=true;
     time_t now=time(NULL);
     unsigned seconds=3600-(now%3600);
     if (browse_until>now && browse_until-now<seconds) seconds=browse_until-now;
@@ -386,62 +405,66 @@ void app_main(void)
     if (pc_board_init()!=ESP_OK) { ESP_LOGE(TAG,"board init failed"); return; }
     state_lock=xSemaphoreCreateMutex();
     if (!state_lock) { ESP_LOGE(TAG,"state lock allocation failed"); return; }
+    pc_audio_defaults(&config.audio);
+    if (audio_retained) config.audio=retained_audio;
     /* Measure before Wi-Fi, LEDs and the panel warm the board. */
     read_indoor();
     time_t rtc_time;
     if (pc_rtc_read(&rtc_time)==ESP_OK) { struct timeval tv={.tv_sec=rtc_time}; settimeofday(&tv,NULL); }
+    uint32_t causes=esp_sleep_get_wakeup_causes();
+    bool power_boot=(causes&(1u<<ESP_SLEEP_WAKEUP_UNDEFINED))!=0;
+    wake_keys=(causes&(1u<<ESP_SLEEP_WAKEUP_EXT1))?esp_sleep_get_ext1_wakeup_status():0;
+    bool button_wake=(wake_keys&PC_KEY_MASK)!=0;
+    esp_err_t led_err=pc_led_init(power_boot||button_wake);
+    if (led_err!=ESP_OK) ESP_LOGW(TAG,"RGB LED init failed: %s",esp_err_to_name(led_err));
+    esp_err_t audio_err=pc_audio_init();
+    if (audio_err!=ESP_OK) ESP_LOGW(TAG,"audio init failed: %s",esp_err_to_name(audio_err));
+    update_battery();
+    /* Start button polling and wake-key audio before slow SD mount and Wi-Fi init so wake presses never drop. */
+    if (xTaskCreate(button_task,"buttons",3072,NULL,5,NULL)!=pdPASS) { ESP_LOGE(TAG,"button task failed"); return; }
     card_up();
     if (card) pc_storage_migrate();
     else ESP_LOGW(TAG,"no TF card: settings, anniversaries and card fonts unavailable");
-    pc_config_load(&config); pc_weather_load(&weather,config.location); holidays=pc_holidays_load();
+    if (card) pc_config_load(&config);
+    retained_audio=config.audio; audio_retained=true;
+    pc_weather_load(&weather,config.location); holidays=pc_holidays_load();
     pc_anniversaries_load(&anniversaries);
     if (anniv_index>=anniversaries.count) anniv_index=0;
     pixels=heap_caps_malloc(PC_PIXELS,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     packed=heap_caps_malloc(PC_PACKED_BYTES,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
     if (!pixels || !packed) { ESP_LOGE(TAG,"PSRAM framebuffer allocation failed"); return; }
     if (pc_wifi_init()!=ESP_OK) { ESP_LOGE(TAG,"Wi-Fi init failed"); return; }
-    uint32_t causes=esp_sleep_get_wakeup_causes();
-    bool power_boot=(causes&(1u<<ESP_SLEEP_WAKEUP_UNDEFINED))!=0;
-    uint64_t wake=(causes&(1u<<ESP_SLEEP_WAKEUP_EXT1))?esp_sleep_get_ext1_wakeup_status():0;
-    bool button_wake=(wake&PC_KEY_MASK)!=0;
-    esp_err_t led_err=pc_led_init(power_boot||button_wake);
-    if (led_err!=ESP_OK) ESP_LOGW(TAG,"RGB LED init failed: %s",esp_err_to_name(led_err));
-    esp_err_t audio_err=pc_audio_init();
-    if (audio_err!=ESP_OK) ESP_LOGW(TAG,"audio init failed: %s",esp_err_to_name(audio_err));
-    update_battery();
     if (power_boot) {
         pc_led_boot();
         if (config.audio.boot) pc_audio_play("_boot",config.audio.volume);
     }
     offline=retained_magic==MAGIC?last_offline:true;
     if (retained_magic!=MAGIC || !browse_until || time(NULL)>=browse_until) return_today();
-    if (button_wake) {
-        if ((wake&(1ULL<<PC_KEY_A)) && gpio_get_level(PC_KEY_A)) enqueue(PC_ACTION_PREVIOUS);
-        if ((wake&(1ULL<<PC_KEY_B)) && gpio_get_level(PC_KEY_B)) enqueue(PC_ACTION_NEXT);
-        if ((wake&(1ULL<<PC_KEY_C)) && gpio_get_level(PC_KEY_C)) enqueue(PC_ACTION_TODAY);
-    }
-    if (xTaskCreate(button_task,"buttons",3072,NULL,5,NULL)!=pdPASS) { ESP_LOGE(TAG,"button task failed"); return; }
 #ifdef CONFIG_PC_PANEL_TEST
     pc_render_test(pixels);
     ESP_LOGI(TAG,"panel test: %s",esp_err_to_name(pc_epd_refresh(pixels)));
     return;
 #endif
     /* Without a card nothing can be saved, so only offer setup on power-on instead of every hourly wake. */
-    if (!config_usable() && (card || power_boot)) { setup_mode(); update_weather(); draw(false); }
-    else if (!button_wake) {
+    if (!config_usable() && (card || power_boot)) {
+        setup_mode(); update_weather(); auto_select(); scheduled_chime(true); draw(false);
+    } else if (!button_wake) {
         auto_select();
+        scheduled_chime(!power_boot || !config.audio.boot);
         /* A five-minute browse timeout should not trigger another weather fetch. */
-        if (page==PAGE_CALENDAR && (!weather.valid || time(NULL)-weather.fetched>=3500 || power_boot || !pc_config_valid(&config)))
+        if ((page==PAGE_CALENDAR || power_boot || !pc_config_valid(&config)) &&
+            (!weather.valid || time(NULL)-weather.fetched>=3500 || power_boot || !pc_config_valid(&config)))
             update_weather();
+        auto_select();
         if (!browse_until || time(NULL)>=browse_until) return_today();
-        if (!power_boot || !config.audio.boot) scheduled_chime();
+        scheduled_chime(!power_boot || !config.audio.boot);
         draw(false);
     }
     int64_t awake_until=esp_timer_get_time()+2000000;
     for (;;) {
         pc_actions_t a;
         if (ready_actions(&a)) {
-            if (a.setup) { setup_mode(); update_weather(); }
+            if (a.setup) { setup_mode(); update_weather(); auto_select(); scheduled_chime(true); }
             else {
                 if (a.page) {
                     if (page==PAGE_ANNIVERSARY) leave_anniversary();

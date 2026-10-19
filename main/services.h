@@ -22,8 +22,14 @@ esp_err_t pc_anniversaries_save(const pc_anniversaries_t *list);
 bool pc_image_path(const char *id,const char *kind,char *out,size_t capacity);
 esp_err_t pc_image_read(const char *id,uint8_t *packed);
 void pc_image_remove(const char *id);
+typedef struct {
+    char ssid[33];
+    int rssi;
+    bool auth;
+} pc_wifi_ap_t;
 esp_err_t pc_wifi_init(void);
-esp_err_t pc_wifi_connect(const pc_config_t *config,int64_t deadline);
+int pc_wifi_scan(pc_wifi_ap_t *out,int max_count);
+esp_err_t pc_wifi_connect(pc_config_t *config,int64_t deadline);
 void pc_wifi_off(void);
 bool pc_sync_time(int64_t deadline);
 esp_err_t pc_weather_fetch(const pc_config_t *config,pc_weather_t *weather,int64_t deadline);

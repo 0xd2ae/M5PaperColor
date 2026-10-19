@@ -160,23 +160,28 @@ details{margin-top:12px}summary{cursor:pointer;color:var(--blue);font-weight:600
       </section>
 
       <section id="tab-settings" aria-labelledby="t-settings" hidden>
-        <div class="card"><header><span class="dot" id="wifiDot"></span><h2>家庭 Wi-Fi</h2></header>
-          <label class="field"><span>名称（仅 2.4 GHz）</span><input id="ssid" maxlength="32" autocomplete="off"></label>
+        <div class="card"><header><span class="dot" id="wifiDot"></span><h2>Wi-Fi 与多地点自动切换</h2></header>
+          <div id="savedWifiBox" hidden style="margin-bottom:12px">
+            <span style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px">已保存的 Wi-Fi 与绑定地区（最多 8 个，更换环境后自动连接并切换城市）</span>
+            <div id="savedWifiList" style="display:flex;flex-direction:column;gap:6px"></div>
+          </div>
+          <label class="field"><span>周围 2.4 GHz Wi-Fi</span><div class="row"><select id="wifiScanSelect"><option value="">点击右侧“扫描”自动查找周围 Wi-Fi</option></select><button id="scanWifi" type="button" style="flex:none">扫描</button></div></label>
+          <label class="field"><span>Wi-Fi 名称（可从上方选择或手动输入）</span><input id="ssid" maxlength="32" autocomplete="off" placeholder="选择扫描到的 Wi-Fi 或输入名称"></label>
           <label class="field"><span>密码</span><input id="password" type="password" maxlength="63" autocomplete="new-password"></label>
           <p class="hint" id="passwordHint">开放网络可留空。</p>
           <div class="row" style="margin-top:12px"><button class="primary" id="connect">连接并校时</button></div>
           <p class="result" id="wifiResult"></p>
           <p class="hint">手机需保持连接热点 PaperColor-Setup；热点切换信道后若断开，请重新连接。</p></div>
 
-        <div class="card"><header><span class="dot" id="weatherDot"></span><h2>天气城市</h2></header>
+        <div class="card"><header><span class="dot" id="weatherDot"></span><h2>天气城市（与当前填写的 Wi-Fi 绑定）</h2></header>
           <label class="field"><span>和风天气 API Host</span><input id="host" placeholder="控制台里的 xxx.qweatherapi.com" autocomplete="off"></label>
           <label class="field"><span>API Key</span><input id="key" type="password" maxlength="128" autocomplete="new-password"></label>
           <p class="hint" id="keyHint">使用你自己的和风天气凭据。</p>
           <label class="field"><span>搜索城市或区县</span><div class="row"><input id="query" placeholder="例如：深圳" maxlength="32"><button id="search" style="flex:none">搜索</button></div></label>
-          <label class="field"><span>选择城市</span><select id="city"><option value="">请先搜索</option></select></label>
-          <div class="row" style="margin-top:12px"><button class="primary" id="save">验证天气并保存</button></div>
+          <label class="field"><span>选择绑定城市</span><select id="city"><option value="">请先搜索</option></select></label>
+          <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="primary" id="save">验证天气并保存退出</button><button id="saveStay" type="button">保存此 Wi-Fi 与地区（继续添加）</button></div>
           <p class="result" id="weatherResult"></p>
-          <p class="hint">保存前会先验证天气接口，失败时保留原配置。保存成功后设备退出配置并刷新屏幕。<a href="https://dev.qweather.com/" target="_blank" rel="noreferrer">和风天气开发者服务</a></p></div>
+          <p class="hint">每个 Wi-Fi 可绑定各自的城市（如家里绑深圳、公司绑广州）。更换地点自动连接对应 Wi-Fi 时，屏幕会自动切换为该 Wi-Fi 绑定的城市天气。<a href="https://dev.qweather.com/" target="_blank" rel="noreferrer">和风天气开发者服务</a></p></div>
 
         <div class="card"><header><span class="dot" id="audioDot"></span><h2>声音与报时</h2></header>
           <p class="hint">整点报时、开机发声、按键提示音和纪念日音乐默认全部静音，按需开启。</p>

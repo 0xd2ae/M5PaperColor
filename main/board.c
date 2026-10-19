@@ -13,24 +13,40 @@
 #include "esp_rom_sys.h"
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include <string.h>
 
 static const char *TAG="board";
 static i2c_master_bus_handle_t bus;
 static i2c_master_dev_handle_t pm,rtc,sht,codec;
+static SemaphoreHandle_t i2c_lock;
 static spi_device_handle_t panel;
 static bool panel_ready;
-static esp_err_t read_reg(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t *data,size_t count)
+static esp_err_t read_reg_unlocked(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t *data,size_t count)
 {
     return i2c_master_transmit_receive(dev,&reg,1,data,count,500);
 }
-static esp_err_t write_regs(i2c_master_dev_handle_t dev,uint8_t reg,const uint8_t *data,size_t count)
+static esp_err_t write_regs_unlocked(i2c_master_dev_handle_t dev,uint8_t reg,const uint8_t *data,size_t count)
 {
     uint8_t bytes[16];
     if (count>15) return ESP_ERR_INVALID_SIZE;
     bytes[0]=reg; memcpy(bytes+1,data,count);
     return i2c_master_transmit(dev,bytes,count+1,500);
+}
+static esp_err_t read_reg(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t *data,size_t count)
+{
+    if (i2c_lock) xSemaphoreTake(i2c_lock,portMAX_DELAY);
+    esp_err_t err=read_reg_unlocked(dev,reg,data,count);
+    if (i2c_lock) xSemaphoreGive(i2c_lock);
+    return err;
+}
+static esp_err_t write_regs(i2c_master_dev_handle_t dev,uint8_t reg,const uint8_t *data,size_t count)
+{
+    if (i2c_lock) xSemaphoreTake(i2c_lock,portMAX_DELAY);
+    esp_err_t err=write_regs_unlocked(dev,reg,data,count);
+    if (i2c_lock) xSemaphoreGive(i2c_lock);
+    return err;
 }
 static esp_err_t write_reg(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t value)
 {
@@ -38,12 +54,19 @@ static esp_err_t write_reg(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t value
 }
 static esp_err_t update(i2c_master_dev_handle_t dev,uint8_t reg,uint8_t clear,uint8_t set)
 {
+    if (i2c_lock) xSemaphoreTake(i2c_lock,portMAX_DELAY);
     uint8_t value;
-    esp_err_t err=read_reg(dev,reg,&value,1);
-    return err==ESP_OK ? write_reg(dev,reg,(value&~clear)|set) : err;
+    esp_err_t err=read_reg_unlocked(dev,reg,&value,1);
+    if (err==ESP_OK) err=write_regs_unlocked(dev,reg,(const uint8_t[]){(uint8_t)((value&~clear)|set)},1);
+    if (i2c_lock) xSemaphoreGive(i2c_lock);
+    return err;
 }
 esp_err_t pc_board_init(void)
 {
+    if (!i2c_lock) {
+        i2c_lock=xSemaphoreCreateMutex();
+        if (!i2c_lock) return ESP_ERR_NO_MEM;
+    }
     rtc_gpio_deinit(PC_KEY_A); rtc_gpio_deinit(PC_KEY_B); rtc_gpio_deinit(PC_KEY_C); rtc_gpio_deinit(7);
     gpio_config_t keys={.pin_bit_mask=PC_KEY_MASK,.mode=GPIO_MODE_INPUT,.pull_up_en=GPIO_PULLUP_ENABLE};
     ESP_RETURN_ON_ERROR(gpio_config(&keys),TAG,"keys");
@@ -258,10 +281,16 @@ static uint8_t sht_crc(const uint8_t *data)
 esp_err_t pc_climate_read(int *temperature_x10,int *humidity)
 {
     uint8_t cmd=0xfd,bytes[6];
-    ESP_RETURN_ON_ERROR(i2c_master_transmit(sht,&cmd,1,500),TAG,"sht40 measure");
+    if (i2c_lock) xSemaphoreTake(i2c_lock,portMAX_DELAY);
+    esp_err_t err=i2c_master_transmit(sht,&cmd,1,500);
+    if (i2c_lock) xSemaphoreGive(i2c_lock);
+    ESP_RETURN_ON_ERROR(err,TAG,"sht40 measure");
     /* High-precision measurement takes up to 8.3 ms. */
-    vTaskDelay(pdMS_TO_TICKS(20));
-    ESP_RETURN_ON_ERROR(i2c_master_receive(sht,bytes,6,500),TAG,"sht40 read");
+    vTaskDelay(pdMS_TO_TICKS(20)+1);
+    if (i2c_lock) xSemaphoreTake(i2c_lock,portMAX_DELAY);
+    err=i2c_master_receive(sht,bytes,6,500);
+    if (i2c_lock) xSemaphoreGive(i2c_lock);
+    ESP_RETURN_ON_ERROR(err,TAG,"sht40 read");
     if (sht_crc(bytes)!=bytes[2] || sht_crc(bytes+3)!=bytes[5]) return ESP_ERR_INVALID_CRC;
     int t=(int)(17500LL*((bytes[0]<<8)|bytes[1])/65535)-4500;
     int h=(int)(12500LL*((bytes[3]<<8)|bytes[4])/65535)-600;
@@ -279,7 +308,14 @@ int pc_battery_percent(void)
 }
 esp_err_t pc_board_codec_write(uint8_t reg,uint8_t value)
 {
-    return codec ? write_reg(codec,reg,value) : ESP_ERR_INVALID_STATE;
+    if (!codec) return ESP_ERR_INVALID_STATE;
+    esp_err_t err=ESP_FAIL;
+    for (int attempt=0;attempt<4;attempt++) {
+        err=write_reg(codec,reg,value);
+        if (err==ESP_OK) return ESP_OK;
+        vTaskDelay(1);
+    }
+    return err;
 }
 void pc_board_audio_power(bool codec_on,bool spk_on)
 {

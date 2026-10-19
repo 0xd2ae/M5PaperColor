@@ -192,7 +192,7 @@ static void render_header(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *h
     snprintf(buf,sizeof(buf),s->battery_percent<0?"电量 --":"电量 %d%%",s->battery_percent);
     int right=384-text_width(buf,14)-1;
     bold_text(p,right,9,buf,14,PC_BLACK,384-right);
-    const char *status="";
+     const char *status="";
     if (s->card_missing) status="未插卡";
     else if (s->time_valid && !pc_holidays_has_year(holidays,s->view_year)) status="调休数据未导入";
     else if (s->time_valid && s->weather.valid && time(NULL)-s->weather.fetched>10800) status="天气已过期";
@@ -293,14 +293,14 @@ static void render_month(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *ho
     rect(p,16,241,368,1,PC_BLACK);
     snprintf(buf,sizeof(buf),"%d年 %d月",s->view_year,s->view_month);
     bold_centered(p,200,245,buf,24,PC_BLACK,368);
-    static const char *week[]={"一","二","三","四","五","六","日"};
+    static const char *week[]={"日","一","二","三","四","五","六"};
     for (int i=0;i<7;i++) {
         int x=18+i*52;
-        bold_centered(p,x+26,276,week[i],18,i>=5?PC_RED:PC_BLACK,48);
+        bold_centered(p,x+26,276,week[i],18,(i==0||i==6)?PC_RED:PC_BLACK,48);
     }
     rect(p,16,297,368,1,PC_BLACK);
     pc_date_t first={s->view_year,s->view_month,1};
-    int offset=pc_weekday(first),start=pc_day_number(first)-offset;
+    int offset=(pc_weekday(first)+1)%7,start=pc_day_number(first)-offset;
     int rows=(offset+pc_month_days(s->view_year,s->view_month)+6)/7;
     int row_h=296/rows; if (row_h>58) row_h=58;
     for (int i=0;i<rows*7;i++) {
@@ -308,7 +308,7 @@ static void render_month(uint8_t *p,const pc_screen_t *s,const pc_holidays_t *ho
         if (d.month!=s->view_month) continue;
         int x=18+(i%7)*52,cell=300+(i/7)*row_h,top=cell+(row_h-46)/2,cx=x+26;
         pc_day_kind_t kind=pc_holidays_kind(holidays,d,NULL);
-        bool weekend=i%7>=5;
+        bool weekend=(i%7==0)||(i%7==6);
         bool today=d.year==s->today.year && d.month==s->today.month && d.day==s->today.day;
         pc_color_t day_color=kind==PC_REST?PC_RED:(weekend && kind!=PC_WORK)?PC_RED:PC_BLACK;
         pc_color_t lunar_color=PC_BLACK;

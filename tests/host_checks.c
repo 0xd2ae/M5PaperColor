@@ -198,6 +198,21 @@ static void config_tests(void)
         "{\"id\":\"101280601\",\"name\":\"深圳\",\"lat\":\"22.54\",\"lon\":\"114.06\",\"tz\":\"Asia/Shanghai\"}]}",&city));
     assert(!strcmp(city.location,"101280601") && city.coordinates && city.longitude==114.06);
     assert(!pc_city_parse("{\"code\":\"404\"}",&city));
+    /* Multi-Wi-Fi profiles with bound regions. */
+    pc_config_t multi={0},mback={0};
+    strcpy(multi.host,"abc.qweatherapi.com"); strcpy(multi.api_key,"KEY_123-x");
+    pc_wifi_profile_t home={.ssid="HomeWiFi",.password="homepass1",.city="深圳",.location="101280601",.latitude=22.54,.longitude=114.06,.coordinates=true};
+    pc_wifi_profile_t office={.ssid="OfficeWiFi",.password="workpass2",.city="广州",.location="101280101",.latitude=23.13,.longitude=113.26,.coordinates=true};
+    assert(pc_config_wifi_upsert(&multi,&home,true));
+    assert(pc_config_wifi_upsert(&multi,&office,false));
+    assert(multi.wifi_count==2 && !strcmp(multi.ssid,"HomeWiFi") && !strcmp(multi.city,"深圳"));
+    json=pc_config_to_json(&multi); assert(json);
+    assert(pc_config_from_json(json,&mback)); free(json);
+    assert(mback.wifi_count==2 && !strcmp(mback.ssid,"HomeWiFi") && !strcmp(mback.city,"深圳"));
+    assert(pc_config_wifi_activate(&mback,"OfficeWiFi"));
+    assert(!strcmp(mback.ssid,"OfficeWiFi") && !strcmp(mback.password,"workpass2") && !strcmp(mback.city,"广州") && !strcmp(mback.location,"101280101"));
+    assert(pc_config_wifi_remove(&mback,"OfficeWiFi"));
+    assert(mback.wifi_count==1 && !strcmp(mback.ssid,"HomeWiFi") && !strcmp(mback.city,"深圳"));
 }
 static void font_tests(void)
 {
